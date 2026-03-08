@@ -6,13 +6,24 @@ const tokens = Deno.env
 	.map((t) => t.trim())
 	.filter(Boolean) ?? [];
 
-const server = createServer({
-	port: Number(Deno.env.get("PORT")) || undefined,
-	staticDir: Deno.env.get("STATIC_DIR") || undefined,
-	uploadTokens: tokens.length > 0 ? tokens : undefined,
-	uploadPath: Deno.env.get("UPLOAD_PATH") || undefined,
-	staticRoutePath: Deno.env.get("STATIC_ROUTE_PATH") || undefined,
-	enableUploadForm: Deno.env.get("ENABLE_UPLOAD_FORM") !== "false",
-});
+const options: Record<string, unknown> = {};
+
+const port = Number(Deno.env.get("PORT"));
+if (port) options.port = port;
+
+const staticDir = Deno.env.get("STATIC_DIR");
+if (staticDir) options.staticDir = staticDir;
+
+if (tokens.length > 0) options.uploadTokens = tokens;
+
+const uploadPath = Deno.env.get("UPLOAD_PATH");
+if (uploadPath) options.uploadPath = uploadPath;
+
+const staticRoutePath = Deno.env.get("STATIC_ROUTE_PATH");
+if (staticRoutePath) options.staticRoutePath = staticRoutePath;
+
+if (Deno.env.get("ENABLE_UPLOAD_FORM") === "false") options.enableUploadForm = false;
+
+const server = createServer(options);
 
 server.start();

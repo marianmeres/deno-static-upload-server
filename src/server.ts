@@ -1,6 +1,10 @@
 import { serveDir } from "jsr:@std/http@^1.0.25/file-server";
 import { dirname, join, resolve } from "jsr:@std/path@^1.1.4";
 
+const { name: NAME, version: VERSION } = await fetch(
+	new URL("../deno.json", import.meta.url),
+).then((r) => r.json());
+
 /** Configuration options for the static upload server. */
 export interface StaticServerOptions {
 	/** Port to listen on. @default 8000 */
@@ -26,9 +30,9 @@ const DEFAULT_OPTIONS: Required<StaticServerOptions> = {
 	enableUploadForm: true,
 };
 
-const UPLOAD_HTML = await Deno.readTextFile(
+const UPLOAD_HTML = await fetch(
 	new URL("./upload.html", import.meta.url),
-);
+).then((r) => r.text());
 
 function isAuthorized(req: Request, tokens: string[]): boolean {
 	if (tokens.length === 0) return true; // auth disabled
@@ -137,11 +141,19 @@ export function createServer(opts: StaticServerOptions = {}): StaticServer {
 			return Response.json({ uploaded });
 		}
 
-		// GET|HEAD /static/* — served by serveDir
+		// GET / or /static — server identification
+		if (
+			req.method === "GET" &&
+			(url.pathname === "/" || url.pathname === staticRoute ||
+				url.pathname === staticRoute + "/")
+		) {
+			return Response.json({ name: NAME, version: VERSION });
+		}
+
+		// GET|HEAD /static/:projectId/* — served by serveDir
 		if (
 			(req.method === "GET" || req.method === "HEAD") &&
-			(url.pathname === staticRoute ||
-				url.pathname.startsWith(staticRoute + "/"))
+			url.pathname.startsWith(staticRoute + "/")
 		) {
 			// serveDir only accepts GET, so convert HEAD→GET and strip body
 			const effectiveReq = req.method === "HEAD"
