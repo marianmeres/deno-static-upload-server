@@ -1,13 +1,20 @@
-import { serveDir } from "jsr:@std/http/file-server";
-import { dirname, join, resolve } from "jsr:@std/path";
+import { serveDir } from "jsr:@std/http@^1.0.25/file-server";
+import { dirname, join, resolve } from "jsr:@std/path@^1.1.4";
 
+/** Configuration options for the static upload server. */
 export interface StaticServerOptions {
+	/** Port to listen on. @default 8000 */
 	port?: number;
+	/** Directory to store and serve static files from. @default "./static" */
 	staticDir?: string;
-	uploadTokens?: string[]; // multiple tokens for zero-downtime rotation
-	uploadPath?: string; // e.g. "/upload"
-	staticRoutePath?: string; // e.g. "/static"
-	enableUploadForm?: boolean; // serve HTML upload form on GET /upload/:projectId
+	/** Bearer tokens for upload authorization. Multiple tokens allow zero-downtime rotation. Empty array disables auth. @default [] */
+	uploadTokens?: string[];
+	/** Route path for the upload endpoint, e.g. `"/upload"`. @default "/upload" */
+	uploadPath?: string;
+	/** Route path for serving static files, e.g. `"/static"`. @default "/static" */
+	staticRoutePath?: string;
+	/** Whether to serve the HTML upload form on `GET /upload/:projectId`. @default true */
+	enableUploadForm?: boolean;
 }
 
 const DEFAULT_OPTIONS: Required<StaticServerOptions> = {
@@ -30,7 +37,21 @@ function isAuthorized(req: Request, tokens: string[]): boolean {
 	return token !== null && tokens.includes(token);
 }
 
-export function createServer(opts: StaticServerOptions = {}) {
+/** Static server instance returned by {@linkcode createServer}. */
+export interface StaticServer {
+	/** Request handler suitable for use with `Deno.serve` or as middleware. */
+	handler: (req: Request) => Promise<Response>;
+	/** Start listening on the configured port. */
+	start: () => ReturnType<typeof Deno.serve>;
+}
+
+/**
+ * Creates a static file server with optional file upload capability.
+ *
+ * @param opts Server configuration options.
+ * @returns A server object with a `handler` function and a `start` method.
+ */
+export function createServer(opts: StaticServerOptions = {}): StaticServer {
 	const options = { ...DEFAULT_OPTIONS, ...opts };
 
 	// Normalise: ensure paths end without slash

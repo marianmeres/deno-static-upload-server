@@ -3,7 +3,7 @@
 [![JSR](https://jsr.io/badges/@marianmeres/deno-static-upload-server)](https://jsr.io/@marianmeres/deno-static-upload-server)
 [![License](https://img.shields.io/github/license/marianmeres/deno-static-upload-server)](LICENSE)
 
-A lightweight, self-hosted static file server with a simple upload endpoint. Built for teams who need a reliable home for their static assets without the complexity of a full cloud storage setup.
+A lightweight, self-hosted static file server with a simple upload endpoint. Built for reliable home for static assets without the complexity of a full cloud storage setup.
 
 ## Motivation
 
