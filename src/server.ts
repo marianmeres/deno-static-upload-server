@@ -141,6 +141,69 @@ export function createServer(opts: StaticServerOptions = {}): StaticServer {
 			return Response.json({ uploaded });
 		}
 
+		// DELETE /static/:projectId/*filePath — delete a single file
+		if (
+			req.method === "DELETE" &&
+			url.pathname.startsWith(staticRoute + "/")
+		) {
+			// Only available when auth tokens are configured
+			if (options.uploadTokens.length === 0) {
+				return new Response("Not found", { status: 404 });
+			}
+
+			if (!isAuthorized(req, options.uploadTokens)) {
+				return new Response("Unauthorized", { status: 401 });
+			}
+
+			const rest = url.pathname.slice(staticRoute.length + 1);
+			const segments = rest.split("/");
+			const projectId = segments[0];
+
+			if (!projectId || !/^[a-zA-Z0-9\-_]+$/.test(projectId)) {
+				return new Response("Invalid or missing project ID", {
+					status: 400,
+				});
+			}
+
+			const filePath = segments.slice(1).join("/");
+			if (!filePath) {
+				return new Response("File path is required", { status: 400 });
+			}
+
+			// Sanitize path segments
+			const safePath = filePath
+				.split("/")
+				.map((s) => s.replace(/[^a-zA-Z0-9.\-_]/g, "_"))
+				.filter((s) => s.length > 0 && s !== "." && s !== "..")
+				.join("/");
+
+			if (!safePath) {
+				return new Response("Invalid file path", { status: 400 });
+			}
+
+			const absStaticDir = resolve(options.staticDir);
+			const destPath = join(absStaticDir, projectId, safePath);
+
+			if (!destPath.startsWith(absStaticDir + "/")) {
+				return new Response("Invalid file path", { status: 400 });
+			}
+
+			try {
+				const stat = await Deno.stat(destPath);
+				if (!stat.isFile) {
+					return new Response("Not a file", { status: 400 });
+				}
+			} catch {
+				return new Response("Not found", { status: 404 });
+			}
+
+			await Deno.remove(destPath);
+
+			return Response.json({
+				deleted: `${staticRoute}/${projectId}/${safePath}`,
+			});
+		}
+
 		// GET / or /static — server identification
 		if (
 			req.method === "GET" &&
@@ -185,8 +248,11 @@ export function createServer(opts: StaticServerOptions = {}): StaticServer {
 		handler,
 		start() {
 			console.log(`Listening on :${options.port}`);
-			console.log(`  Upload : POST ${uploadRoute}/:projectId`);
-			console.log(`  Static : GET  ${staticRoute}/:projectId/*`);
+			console.log(`  Upload : POST   ${uploadRoute}/:projectId`);
+			console.log(`  Static : GET    ${staticRoute}/:projectId/*`);
+			if (options.uploadTokens.length > 0) {
+				console.log(`  Delete : DELETE ${staticRoute}/:projectId/*`);
+			}
 			console.log(
 				`  Auth   : ${options.uploadTokens.length > 0 ? "enabled" : "disabled"}`,
 			);

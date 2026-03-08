@@ -275,6 +275,190 @@ Deno.test("static: GET non-existent file returns 404", async () => {
 	}
 });
 
+// ─── Delete ─────────────────────────────────────────────────────────
+
+Deno.test("delete: no tokens configured returns 404", async () => {
+	const staticDir = await Deno.makeTempDir();
+	try {
+		const { handler } = createServer({ staticDir, uploadTokens: [] });
+		const req = new Request(`${BASE}/static/proj/file.txt`, {
+			method: "DELETE",
+		});
+		const res = await handler(req);
+		assertEquals(res.status, 404);
+	} finally {
+		await Deno.remove(staticDir, { recursive: true });
+	}
+});
+
+Deno.test("delete: missing auth header returns 401", async () => {
+	const staticDir = await Deno.makeTempDir();
+	try {
+		const { handler } = createServer({
+			staticDir,
+			uploadTokens: ["secret"],
+		});
+		const req = new Request(`${BASE}/static/proj/file.txt`, {
+			method: "DELETE",
+		});
+		const res = await handler(req);
+		assertEquals(res.status, 401);
+	} finally {
+		await Deno.remove(staticDir, { recursive: true });
+	}
+});
+
+Deno.test("delete: wrong token returns 401", async () => {
+	const staticDir = await Deno.makeTempDir();
+	try {
+		const { handler } = createServer({
+			staticDir,
+			uploadTokens: ["secret"],
+		});
+		const req = new Request(`${BASE}/static/proj/file.txt`, {
+			method: "DELETE",
+			headers: { Authorization: "Bearer wrong" },
+		});
+		const res = await handler(req);
+		assertEquals(res.status, 401);
+	} finally {
+		await Deno.remove(staticDir, { recursive: true });
+	}
+});
+
+Deno.test("delete: existing file is removed", async () => {
+	const staticDir = await Deno.makeTempDir();
+	try {
+		const { handler } = createServer({
+			staticDir,
+			uploadTokens: ["secret"],
+		});
+
+		// Upload a file first
+		const uploadReq = makeUploadRequest(
+			"proj",
+			[{ name: "hello.txt", content: "world" }],
+			"secret",
+		);
+		await handler(uploadReq);
+
+		// Verify it exists
+		const content = await Deno.readTextFile(
+			join(staticDir, "proj", "hello.txt"),
+		);
+		assertEquals(content, "world");
+
+		// Delete it
+		const deleteReq = new Request(`${BASE}/static/proj/hello.txt`, {
+			method: "DELETE",
+			headers: { Authorization: "Bearer secret" },
+		});
+		const res = await handler(deleteReq);
+		assertEquals(res.status, 200);
+
+		const body = await res.json();
+		assertEquals(body.deleted, "/static/proj/hello.txt");
+
+		// Verify it's gone
+		let exists = true;
+		try {
+			await Deno.stat(join(staticDir, "proj", "hello.txt"));
+		} catch {
+			exists = false;
+		}
+		assertEquals(exists, false);
+	} finally {
+		await Deno.remove(staticDir, { recursive: true });
+	}
+});
+
+Deno.test("delete: non-existent file returns 404", async () => {
+	const staticDir = await Deno.makeTempDir();
+	try {
+		const { handler } = createServer({
+			staticDir,
+			uploadTokens: ["secret"],
+		});
+		const req = new Request(`${BASE}/static/proj/nope.txt`, {
+			method: "DELETE",
+			headers: { Authorization: "Bearer secret" },
+		});
+		const res = await handler(req);
+		assertEquals(res.status, 404);
+	} finally {
+		await Deno.remove(staticDir, { recursive: true });
+	}
+});
+
+Deno.test("delete: path traversal is prevented", async () => {
+	const staticDir = await Deno.makeTempDir();
+	try {
+		const { handler } = createServer({
+			staticDir,
+			uploadTokens: ["secret"],
+		});
+
+		// Upload a file first
+		const uploadReq = makeUploadRequest(
+			"proj",
+			[{ name: "safe.txt", content: "data" }],
+			"secret",
+		);
+		await handler(uploadReq);
+
+		// Try to delete with traversal
+		const req = new Request(
+			`${BASE}/static/proj/../../etc/passwd`,
+			{
+				method: "DELETE",
+				headers: { Authorization: "Bearer secret" },
+			},
+		);
+		const res = await handler(req);
+		// The traversal segments get stripped/sanitized, so it won't find the file
+		assertEquals(res.status, 404);
+	} finally {
+		await Deno.remove(staticDir, { recursive: true });
+	}
+});
+
+Deno.test("delete: invalid projectId returns 400", async () => {
+	const staticDir = await Deno.makeTempDir();
+	try {
+		const { handler } = createServer({
+			staticDir,
+			uploadTokens: ["secret"],
+		});
+		const req = new Request(`${BASE}/static/bad project!/file.txt`, {
+			method: "DELETE",
+			headers: { Authorization: "Bearer secret" },
+		});
+		const res = await handler(req);
+		assertEquals(res.status, 400);
+	} finally {
+		await Deno.remove(staticDir, { recursive: true });
+	}
+});
+
+Deno.test("delete: missing file path returns 400", async () => {
+	const staticDir = await Deno.makeTempDir();
+	try {
+		const { handler } = createServer({
+			staticDir,
+			uploadTokens: ["secret"],
+		});
+		// /static/proj/ — has projectId but no file path
+		const req = new Request(`${BASE}/static/proj/`, {
+			method: "DELETE",
+			headers: { Authorization: "Bearer secret" },
+		});
+		const res = await handler(req);
+		assertEquals(res.status, 400);
+	} finally {
+		await Deno.remove(staticDir, { recursive: true });
+	}
+});
+
 // ─── Route matching ─────────────────────────────────────────────────
 
 Deno.test("route: GET /staticfoo returns 404", async () => {

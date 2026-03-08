@@ -94,6 +94,37 @@ Upload one or more files via `multipart/form-data`.
 
 ---
 
+### `DELETE /static/:projectId/*`
+
+Delete a single file. Only available when `uploadTokens` is non-empty — returns 404 otherwise.
+
+**Headers:**
+
+- `Authorization: Bearer <token>` — Required.
+
+**Path parameters:**
+
+- `:projectId` — Alphanumeric identifier (plus `-` and `_`).
+- `*` — Path to the file to delete.
+
+**Response (200):**
+
+```json
+{ "deleted": "/static/my-app/images/photo.webp" }
+```
+
+**Error responses:**
+
+| Status | Body                            | Cause                               |
+| ------ | ------------------------------- | ----------------------------------- |
+| 400    | `Invalid or missing project ID` | Missing or invalid `:projectId`     |
+| 400    | `File path is required`         | No file path after project ID       |
+| 400    | `Not a file`                    | Path points to a directory          |
+| 401    | `Unauthorized`                  | Missing or invalid bearer token     |
+| 404    | `Not found`                     | File doesn't exist or auth disabled |
+
+---
+
 ### `GET /upload/:projectId`
 
 Serves the built-in HTML upload form (when `enableUploadForm` is `true`). The form includes a token input and file picker, and submits via `fetch` to the same URL.
@@ -141,4 +172,4 @@ Set `ENABLE_UPLOAD_FORM=false` to disable the upload form. All other unset varia
 
 - **Path traversal prevention:** `..` and `.` segments are stripped from uploaded filenames. Resolved paths are verified to remain within the static directory.
 - **Filename sanitization:** Non-alphanumeric characters (except `.`, `-`, `_`) are replaced with `_`.
-- **Auth:** When `uploadTokens` is non-empty, all uploads require a valid `Authorization: Bearer <token>` header. The upload form is unauthenticated (it's a static HTML page; auth happens on POST).
+- **Auth:** When `uploadTokens` is non-empty, uploads and deletes require a valid `Authorization: Bearer <token>` header. The upload form is unauthenticated (it's a static HTML page; auth happens on POST). The delete endpoint is only available when tokens are configured.

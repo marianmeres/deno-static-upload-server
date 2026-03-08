@@ -43,6 +43,6 @@ example/main.ts    — Example usage
 
 ## Before Making Changes
 
-- [ ] Read `src/server.ts` — single source file, ~160 lines
-- [ ] Run `deno task test` — all 15 tests must pass
+- [ ] Read `src/server.ts` — single source file, ~260 lines
+- [ ] Run `deno task test` — all 23 tests must pass
 - [ ] Run `deno fmt` after changes

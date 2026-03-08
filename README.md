@@ -16,6 +16,7 @@ This server solves that by acting as a dedicated home for static assets on a mac
 - **Upload endpoint** — accepts `multipart/form-data` file uploads
 - **Static file serving** — serves uploaded files via `@std/http/file-server` (range requests, correct content types, caching headers all included)
 - **Project scoping** — each app gets its own namespace, preventing collisions when sharing one server across multiple projects
+- **Delete endpoint** — remove uploaded files via `DELETE /static/:projectId/*` (requires auth)
 - **Bearer token auth** — optionally restrict uploads to known sources
 - **Subdirectory preservation** — file paths including subdirectories are preserved as-is
 - **Browser upload form** — built-in HTML form at `GET /upload/:projectId` for quick manual uploads
@@ -112,6 +113,23 @@ await fetch("http://localhost:8000/upload/my-app", {
 	body: form,
 });
 ```
+
+### Delete a file
+
+```
+DELETE /static/:projectId/path/to/file.webp
+Authorization: Bearer <token>
+```
+
+**Response:**
+
+```json
+{
+	"deleted": "/static/my-app/path/to/file.webp"
+}
+```
+
+Only available when `uploadTokens` are configured. Returns 404 if auth is disabled.
 
 ### Serve a file
 
