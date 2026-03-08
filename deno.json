@@ -1,8 +1,14 @@
 {
 	"name": "@marianmeres/deno-static-upload-server",
 	"version": "1.0.0",
+	"exports": {
+		".": "./src/cli.ts",
+		"./server": "./src/server.ts"
+	},
 	"tasks": {
-		"dev": "deno run --watch main.ts",
+		"dev": "deno run --watch -A example/main.ts",
+		"example": "deno run --env=.env.example -A example/main.ts",
+		"test": "deno test -A",
 		"release": "deno run -A jsr:@marianmeres/deno-release",
 		"publish": "deno publish",
 		"rp": "deno task release -y && deno task publish",

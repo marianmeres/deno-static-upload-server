@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>Upload — {{PROJECT_ID}}</title>
+		<style>
+			*, *::before, *::after {
+				box-sizing: border-box;
+			}
+			body {
+				font-family: system-ui, -apple-system, sans-serif;
+				max-width: 520px;
+				margin: 2rem auto;
+				padding: 0 1rem;
+				color: #1a1a1a;
+				background: #fafafa;
+			}
+			h1 {
+				font-size: 1.1rem;
+				font-weight: 600;
+				margin-bottom: 1.5rem;
+			}
+			label {
+				display: block;
+				font-size: 0.85rem;
+				font-weight: 500;
+				margin-bottom: 0.3rem;
+				color: #555;
+			}
+			input[type="text"], input[type="file"] {
+				width: 100%;
+				padding: 0.5rem 0.6rem;
+				border: 1px solid #ccc;
+				border-radius: 4px;
+				font-size: 0.9rem;
+				margin-bottom: 1rem;
+			}
+			input[type="file"] {
+				padding: 0.4rem;
+			}
+			button {
+				padding: 0.55rem 1.4rem;
+				font-size: 0.9rem;
+				font-weight: 500;
+				color: #fff;
+				background: #2563eb;
+				border: none;
+				border-radius: 4px;
+				cursor: pointer;
+			}
+			button:hover {
+				background: #1d4ed8;
+			}
+			button:disabled {
+				background: #93b4f5;
+				cursor: not-allowed;
+			}
+			#result {
+				margin-top: 1.2rem;
+				padding: 0.8rem;
+				border-radius: 4px;
+				font-size: 0.85rem;
+				white-space: pre-wrap;
+				word-break: break-all;
+				display: none;
+			}
+			#result.ok {
+				display: block;
+				background: #ecfdf5;
+				border: 1px solid #a7f3d0;
+				color: #065f46;
+			}
+			#result.err {
+				display: block;
+				background: #fef2f2;
+				border: 1px solid #fca5a5;
+				color: #991b1b;
+			}
+		</style>
+	</head>
+	<body>
+		<h1>Upload to <code>{{PROJECT_ID}}</code></h1>
+
+		<form id="form">
+			<label for="token">Bearer token (optional)</label>
+			<input
+				type="text"
+				id="token"
+				name="token"
+				placeholder="your-secret-token"
+				autocomplete="off"
+			>
+
+			<label for="files">Files</label>
+			<input type="file" id="files" name="files" multiple required>
+
+			<button type="submit" id="btn">Upload</button>
+		</form>
+
+		<div id="result"></div>
+
+		<script>
+			const form = document.getElementById("form");
+			const btn = document.getElementById("btn");
+			const result = document.getElementById("result");
+
+			form.addEventListener("submit", async (e) => {
+				e.preventDefault();
+				const token = document.getElementById("token").value
+					.trim();
+				const files = document.getElementById("files").files;
+				if (!files.length) return;
+
+				const body = new FormData();
+				for (const f of files) body.append("file", f);
+
+				const headers = {};
+				if (token) headers["Authorization"] = "Bearer " + token;
+
+				btn.disabled = true;
+				btn.textContent = "Uploading\u2026";
+				result.className = "";
+				result.textContent = "";
+
+				try {
+					const res = await fetch(location.pathname, {
+						method: "POST",
+						headers,
+						body,
+					});
+					const text = await res.text();
+					if (res.ok) {
+						result.className = "ok";
+						result.textContent = text;
+					} else {
+						result.className = "err";
+						result.textContent = res.status + " " + text;
+					}
+				} catch (err) {
+					result.className = "err";
+					result.textContent = "Network error: " + err.message;
+				} finally {
+					btn.disabled = false;
+					btn.textContent = "Upload";
+				}
+			});
+		</script>
+	</body>
+</html>
