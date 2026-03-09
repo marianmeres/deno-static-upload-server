@@ -1,26 +1,28 @@
 {
-  "name": "@marianmeres/deno-static-upload-server",
-  "version": "1.1.0",
-  "exports": {
-    ".": "./src/cli.ts",
-    "./server": "./src/server.ts"
-  },
-  "tasks": {
-    "dev": "deno run --watch -A example/main.ts",
-    "example": "deno run --env=.env.example -A example/main.ts",
-    "test": "deno test -A",
-    "release": "deno run -A jsr:@marianmeres/deno-release",
-    "publish": "deno publish",
-    "rp": "deno task release -y && deno task publish",
-    "rpm": "deno task release minor -y && deno task publish"
-  },
-  "imports": {
-    "@std/assert": "jsr:@std/assert@1"
-  },
-  "fmt": {
-    "useTabs": true,
-    "lineWidth": 90,
-    "indentWidth": 4,
-    "proseWrap": "preserve"
-  }
+	"name": "@marianmeres/deno-static-upload-server",
+	"version": "1.1.0",
+	"exports": {
+		".": "./src/cli.ts",
+		"./server": "./src/server.ts"
+	},
+	"tasks": {
+		"dev": "deno run --watch -A example/main.ts",
+		"example": "deno run --env=.env.example -A example/main.ts",
+		"test": "deno test -A",
+		"release": "deno run -A jsr:@marianmeres/deno-release",
+		"publish": "deno publish",
+		"rp": "deno task release -y && deno task publish",
+		"rpm": "deno task release minor -y && deno task publish"
+	},
+	"imports": {
+		"@std/assert": "jsr:@std/assert@1",
+		"@std/http": "jsr:@std/http@^1.0.25",
+		"@std/path": "jsr:@std/path@^1.1.4"
+	},
+	"fmt": {
+		"useTabs": true,
+		"lineWidth": 90,
+		"indentWidth": 4,
+		"proseWrap": "preserve"
+	}
 }

@@ -1,0 +1,62 @@
+import { serveDir } from "@std/http/file-server";
+import type { ProjectConfig } from "../config.ts";
+import { isAuthorized } from "../auth.ts";
+import { extractBearerToken } from "../auth.ts";
+import { looksLikeJwt, verifyJwt } from "../jwt.ts";
+
+/**
+ * Handle GET/HEAD /:projectId/path/to/file — serve static files.
+ */
+export async function handleServe(
+	req: Request,
+	_projectId: string,
+	config: ProjectConfig,
+	staticDir: string,
+	jwtSecret?: string,
+): Promise<Response> {
+	// Access control check
+	if (config.getAccessControl === "token") {
+		if (!isAuthorized(req, config.uploadTokens)) {
+			return new Response("Unauthorized", { status: 401 });
+		}
+	} else if (config.getAccessControl === "jwt") {
+		const token = extractBearerToken(req);
+		if (!token) {
+			return new Response("Unauthorized", { status: 401 });
+		}
+		const secret = config.jwt?.secret ?? jwtSecret;
+		if (!secret) {
+			return new Response("JWT not configured", { status: 500 });
+		}
+		const payload = await verifyJwt(token, secret);
+		if (!payload) {
+			return new Response("Unauthorized", { status: 401 });
+		}
+	}
+
+	// serveDir only accepts GET, so convert HEAD→GET and strip body
+	const effectiveReq =
+		req.method === "HEAD"
+			? new Request(req.url, {
+					method: "GET",
+					headers: req.headers,
+				})
+			: req;
+
+	const res = await serveDir(effectiveReq, {
+		fsRoot: staticDir,
+		urlRoot: "",
+		enableCors: true,
+	});
+
+	if (req.method === "HEAD") {
+		// Close the body stream to avoid resource leaks
+		res.body?.cancel();
+		return new Response(null, {
+			status: res.status,
+			headers: res.headers,
+		});
+	}
+
+	return res;
+}

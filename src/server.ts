@@ -1,7 +1,13 @@
-import { serveDir } from "jsr:@std/http@^1.0.25/file-server";
-import { dirname, join, resolve } from "jsr:@std/path@^1.1.4";
+import { clearConfigCache, isValidProjectId, loadProjectConfig } from "./config.ts";
+import type { ProjectConfig } from "./config.ts";
+import { handleForm } from "./handlers/form.ts";
+import { handleUpload } from "./handlers/upload.ts";
+import { handleServe } from "./handlers/serve.ts";
+import { handleDelete } from "./handlers/delete.ts";
+import { loadPlugin } from "./plugin.ts";
+import type { PluginContext } from "./plugin.ts";
 
-const { name: NAME, version: VERSION } = await fetch(
+const { version: VERSION } = await fetch(
 	new URL("../deno.json", import.meta.url),
 ).then((r) => r.json());
 
@@ -11,35 +17,23 @@ export interface StaticServerOptions {
 	port?: number;
 	/** Directory to store and serve static files from. @default "./static" */
 	staticDir?: string;
-	/** Bearer tokens for upload authorization. Multiple tokens allow zero-downtime rotation. Empty array disables auth. @default [] */
-	uploadTokens?: string[];
-	/** Route path for the upload endpoint, e.g. `"/upload"`. @default "/upload" */
-	uploadPath?: string;
-	/** Route path for serving static files, e.g. `"/static"`. @default "/static" */
-	staticRoutePath?: string;
-	/** Whether to serve the HTML upload form on `GET /upload/:projectId`. @default true */
+	/** Directory containing per-project JSON config files. @default "./config" */
+	configDir?: string;
+	/** Global default for whether to serve the HTML upload form. @default true */
 	enableUploadForm?: boolean;
+	/** Shared JWT secret (per-project secrets override this). */
+	jwtSecret?: string;
 }
 
-const DEFAULT_OPTIONS: Required<StaticServerOptions> = {
+const DEFAULT_OPTIONS: Required<Omit<StaticServerOptions, "jwtSecret">> & {
+	jwtSecret?: string;
+} = {
 	port: 8000,
 	staticDir: "./static",
-	uploadTokens: [],
-	uploadPath: "/upload",
-	staticRoutePath: "/static",
+	configDir: "./config",
 	enableUploadForm: true,
+	jwtSecret: undefined,
 };
-
-const UPLOAD_HTML = await fetch(
-	new URL("./upload.html", import.meta.url),
-).then((r) => r.text());
-
-function isAuthorized(req: Request, tokens: string[]): boolean {
-	if (tokens.length === 0) return true; // auth disabled
-	const header = req.headers.get("Authorization") ?? "";
-	const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-	return token !== null && tokens.includes(token);
-}
 
 /** Static server instance returned by {@linkcode createServer}. */
 export interface StaticServer {
@@ -49,8 +43,12 @@ export interface StaticServer {
 	start: () => ReturnType<typeof Deno.serve>;
 }
 
+// Re-export for convenience
+export type { PluginContext, ProjectConfig };
+export { clearConfigCache };
+
 /**
- * Creates a static file server with optional file upload capability.
+ * Creates a static file server with per-project configuration and plugin support.
  *
  * @param opts Server configuration options.
  * @returns A server object with a `handler` function and a `start` method.
@@ -58,205 +56,193 @@ export interface StaticServer {
 export function createServer(opts: StaticServerOptions = {}): StaticServer {
 	const options = { ...DEFAULT_OPTIONS, ...opts };
 
-	// Normalise: ensure paths end without slash
-	const staticRoute = options.staticRoutePath.replace(/\/$/, "");
-	const uploadRoute = options.uploadPath.replace(/\/$/, "");
-
 	async function handler(req: Request): Promise<Response> {
 		const url = new URL(req.url);
+		const pathname = url.pathname;
 
-		// GET /upload/:projectId — serve HTML upload form
-		if (
-			options.enableUploadForm &&
-			req.method === "GET" &&
-			url.pathname.startsWith(uploadRoute + "/")
-		) {
-			const projectId = url.pathname.slice(uploadRoute.length + 1).split("/")[0];
-			if (projectId && /^[a-zA-Z0-9\-_]+$/.test(projectId)) {
-				const html = UPLOAD_HTML.replaceAll(
-					"{{PROJECT_ID}}",
-					projectId,
+		// GET / — version signature only
+		if (pathname === "/" && req.method === "GET") {
+			return Response.json({ version: VERSION });
+		}
+
+		// Parse /:projectId[/path/to/file]
+		const segments = pathname.slice(1).split("/");
+		const projectId = segments[0];
+		const filePath = segments.slice(1).join("/");
+
+		if (!projectId || !isValidProjectId(projectId)) {
+			// Root-level files (favicon.ico, robots.txt, etc.)
+			if (
+				(req.method === "GET" || req.method === "HEAD") &&
+				segments.length === 1 &&
+				projectId.includes(".")
+			) {
+				return handleServe(
+					req,
+					"",
+					{ uploadTokens: [] },
+					options.staticDir,
 				);
-				return new Response(html, {
-					headers: { "content-type": "text/html; charset=utf-8" },
-				});
 			}
+			return new Response("Not found", { status: 404 });
 		}
 
-		// POST /upload/:projectId
-		if (req.method === "POST" && url.pathname.startsWith(uploadRoute + "/")) {
-			if (!isAuthorized(req, options.uploadTokens)) {
-				return new Response("Unauthorized", { status: 401 });
-			}
-
-			const projectId = url.pathname.slice(uploadRoute.length + 1).split("/")[0];
-			if (!projectId || !/^[a-zA-Z0-9\-_]+$/.test(projectId)) {
-				return new Response("Invalid or missing project ID", { status: 400 });
-			}
-
-			let formData: FormData;
-			try {
-				formData = await req.formData();
-			} catch {
-				return new Response("Invalid form data", { status: 400 });
-			}
-
-			const uploaded: string[] = [];
-
-			for (const [_field, value] of formData.entries()) {
-				if (!(value instanceof File)) continue;
-
-				const filename = value.name;
-				if (!filename) continue;
-
-				// Sanitize each path segment individually, preserving subdir structure
-				const safePath = filename
-					.split("/")
-					.map((segment) => segment.replace(/[^a-zA-Z0-9.\-_]/g, "_"))
-					.filter((segment) =>
-						segment.length > 0 && segment !== "." && segment !== ".."
-					)
-					.join("/");
-
-				if (!safePath) continue;
-
-				const absStaticDir = resolve(options.staticDir);
-				const destPath = join(absStaticDir, projectId, safePath);
-
-				// Belt-and-suspenders: verify resolved path is within static dir
-				if (!destPath.startsWith(absStaticDir + "/")) {
-					continue;
-				}
-
-				await Deno.mkdir(dirname(destPath), { recursive: true });
-				await Deno.writeFile(destPath, value.stream());
-
-				uploaded.push(`${staticRoute}/${projectId}/${safePath}`);
-			}
-
-			if (uploaded.length === 0) {
-				return new Response("No files received", { status: 400 });
-			}
-
-			return Response.json({ uploaded });
-		}
-
-		// DELETE /static/:projectId/*filePath — delete a single file
-		if (
-			req.method === "DELETE" &&
-			url.pathname.startsWith(staticRoute + "/")
-		) {
-			// Only available when auth tokens are configured
-			if (options.uploadTokens.length === 0) {
+		// Load project config (404 if not found, 500 if invalid)
+		let config: ProjectConfig;
+		try {
+			const loaded = await loadProjectConfig(
+				options.configDir,
+				projectId,
+			);
+			if (!loaded) {
 				return new Response("Not found", { status: 404 });
 			}
+			config = loaded;
+		} catch (e) {
+			console.error(e);
+			return new Response(
+				"Server configuration error",
+				{ status: 500 },
+			);
+		}
 
-			if (!isAuthorized(req, options.uploadTokens)) {
-				return new Response("Unauthorized", { status: 401 });
-			}
+		// Apply global enableUploadForm default
+		if (
+			config.enableUploadForm === undefined &&
+			!options.enableUploadForm
+		) {
+			config = { ...config, enableUploadForm: false };
+		}
 
-			const rest = url.pathname.slice(staticRoute.length + 1);
-			const segments = rest.split("/");
-			const projectId = segments[0];
+		// Default handler for this request
+		async function defaultHandler(
+			r: Request,
+		): Promise<Response> {
+			return await routeToHandler(
+				r,
+				projectId,
+				filePath,
+				config,
+				options.staticDir,
+				options.jwtSecret,
+			);
+		}
 
-			if (!projectId || !/^[a-zA-Z0-9\-_]+$/.test(projectId)) {
-				return new Response("Invalid or missing project ID", {
-					status: 400,
-				});
-			}
-
-			const filePath = segments.slice(1).join("/");
-			if (!filePath) {
-				return new Response("File path is required", { status: 400 });
-			}
-
-			// Sanitize path segments
-			const safePath = filePath
-				.split("/")
-				.map((s) => s.replace(/[^a-zA-Z0-9.\-_]/g, "_"))
-				.filter((s) => s.length > 0 && s !== "." && s !== "..")
-				.join("/");
-
-			if (!safePath) {
-				return new Response("Invalid file path", { status: 400 });
-			}
-
-			const absStaticDir = resolve(options.staticDir);
-			const destPath = join(absStaticDir, projectId, safePath);
-
-			if (!destPath.startsWith(absStaticDir + "/")) {
-				return new Response("Invalid file path", { status: 400 });
-			}
-
+		// Plugin support: if configured, let plugin handle first
+		if (config.plugin) {
 			try {
-				const stat = await Deno.stat(destPath);
-				if (!stat.isFile) {
-					return new Response("Not a file", { status: 400 });
-				}
-			} catch {
-				return new Response("Not found", { status: 404 });
+				const pluginHandler = await loadPlugin(
+					options.configDir,
+					config.plugin,
+				);
+				const ctx: PluginContext = {
+					projectId,
+					config,
+					filePath,
+					staticDir: options.staticDir,
+					defaultHandler,
+				};
+				const pluginResponse = await pluginHandler(
+					req,
+					ctx,
+				);
+				if (pluginResponse) return pluginResponse;
+			} catch (e) {
+				console.error(
+					`Plugin error for project "${projectId}":`,
+					e,
+				);
+				return new Response(
+					"Plugin error",
+					{ status: 500 },
+				);
 			}
-
-			await Deno.remove(destPath);
-
-			return Response.json({
-				deleted: `${staticRoute}/${projectId}/${safePath}`,
-			});
 		}
 
-		// GET / or /static — server identification
-		if (
-			req.method === "GET" &&
-			(url.pathname === "/" || url.pathname === staticRoute ||
-				url.pathname === staticRoute + "/")
-		) {
-			return Response.json({ name: NAME, version: VERSION });
-		}
-
-		// GET|HEAD /static/:projectId/* — served by serveDir
-		if (
-			(req.method === "GET" || req.method === "HEAD") &&
-			url.pathname.startsWith(staticRoute + "/")
-		) {
-			// serveDir only accepts GET, so convert HEAD→GET and strip body
-			const effectiveReq = req.method === "HEAD"
-				? new Request(req.url, {
-					method: "GET",
-					headers: req.headers,
-				})
-				: req;
-			const res = await serveDir(effectiveReq, {
-				fsRoot: options.staticDir,
-				urlRoot: staticRoute.slice(1), // serveDir expects without leading slash
-				enableCors: true,
-			});
-			if (req.method === "HEAD") {
-				// Close the body stream to avoid resource leaks
-				res.body?.cancel();
-				return new Response(null, {
-					status: res.status,
-					headers: res.headers,
-				});
-			}
-			return res;
-		}
-
-		return new Response("Not found", { status: 404 });
+		return defaultHandler(req);
 	}
 
 	return {
 		handler,
 		start() {
 			console.log(`Listening on :${options.port}`);
-			console.log(`  Upload : POST   ${uploadRoute}/:projectId`);
-			console.log(`  Static : GET    ${staticRoute}/:projectId/*`);
-			if (options.uploadTokens.length > 0) {
-				console.log(`  Delete : DELETE ${staticRoute}/:projectId/*`);
-			}
+			console.log(`  Config : ${options.configDir}`);
+			console.log(`  Static : ${options.staticDir}`);
+			console.log(`  Routes :`);
+			console.log(`    GET    /            version`);
 			console.log(
-				`  Auth   : ${options.uploadTokens.length > 0 ? "enabled" : "disabled"}`,
+				`    GET    /:projectId   upload form`,
+			);
+			console.log(
+				`    POST   /:projectId   upload files`,
+			);
+			console.log(
+				`    GET    /:projectId/* serve files`,
+			);
+			console.log(
+				`    HEAD   /:projectId/* file info`,
+			);
+			console.log(
+				`    DELETE /:projectId/* delete file`,
 			);
 			return Deno.serve({ port: options.port }, handler);
 		},
 	};
+}
+
+/** Route a request to the appropriate default handler based on method and path. */
+async function routeToHandler(
+	req: Request,
+	projectId: string,
+	filePath: string,
+	config: ProjectConfig,
+	staticDir: string,
+	jwtSecret?: string,
+): Promise<Response> {
+	const method = req.method;
+
+	// No file path — project-level routes
+	if (!filePath) {
+		if (method === "GET") {
+			const res = handleForm(
+				req,
+				projectId,
+				config,
+				VERSION,
+			);
+			if (res) return res;
+			return new Response("Not found", { status: 404 });
+		}
+		if (method === "POST") {
+			return handleUpload(
+				req,
+				projectId,
+				config,
+				staticDir,
+			);
+		}
+		return new Response("Not found", { status: 404 });
+	}
+
+	// File path present — file-level routes
+	if (method === "GET" || method === "HEAD") {
+		return handleServe(
+			req,
+			projectId,
+			config,
+			staticDir,
+			jwtSecret,
+		);
+	}
+	if (method === "DELETE") {
+		return handleDelete(
+			req,
+			projectId,
+			filePath,
+			config,
+			staticDir,
+		);
+	}
+
+	return new Response("Not found", { status: 404 });
 }

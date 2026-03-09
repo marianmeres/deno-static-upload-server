@@ -1,13 +1,15 @@
 services:
-  upload-server:
-    build: .
-    ports:
-      - "${PORT:-9090}:8000"
-    volumes:
-      - ./data:/data
-    env_file:
-      - .env
-    environment:
-      - PORT=8000
-      - STATIC_DIR=/data
-    restart: unless-stopped
+    upload-server:
+        build: .
+        ports:
+            - "${PORT:-9090}:8000"
+        volumes:
+            - ./data:/data
+            - ./config:/config
+        env_file:
+            - .env
+        environment:
+            - PORT=8000
+            - STATIC_DIR=/data
+            - CONFIG_DIR=/config
+        restart: unless-stopped

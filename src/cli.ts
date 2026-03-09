@@ -1,11 +1,5 @@
 import { createServer } from "./server.ts";
 
-const tokens = Deno.env
-	.get("UPLOAD_TOKENS")
-	?.split(",")
-	.map((t) => t.trim())
-	.filter(Boolean) ?? [];
-
 const options: Record<string, unknown> = {};
 
 const port = Number(Deno.env.get("PORT"));
@@ -14,15 +8,15 @@ if (port) options.port = port;
 const staticDir = Deno.env.get("STATIC_DIR");
 if (staticDir) options.staticDir = staticDir;
 
-if (tokens.length > 0) options.uploadTokens = tokens;
+const configDir = Deno.env.get("CONFIG_DIR");
+if (configDir) options.configDir = configDir;
 
-const uploadPath = Deno.env.get("UPLOAD_PATH");
-if (uploadPath) options.uploadPath = uploadPath;
+if (Deno.env.get("ENABLE_UPLOAD_FORM") === "false") {
+	options.enableUploadForm = false;
+}
 
-const staticRoutePath = Deno.env.get("STATIC_ROUTE_PATH");
-if (staticRoutePath) options.staticRoutePath = staticRoutePath;
-
-if (Deno.env.get("ENABLE_UPLOAD_FORM") === "false") options.enableUploadForm = false;
+const jwtSecret = Deno.env.get("JWT_SECRET");
+if (jwtSecret) options.jwtSecret = jwtSecret;
 
 const server = createServer(options);
 

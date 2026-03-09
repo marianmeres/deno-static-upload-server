@@ -81,6 +81,7 @@
 	</head>
 	<body>
 		<h1>Upload to <code>{{PROJECT_ID}}</code></h1>
+		<p style="font-size: 0.75rem; color: #999; margin-top: -1rem">v{{VERSION}}</p>
 
 		<form id="form">
 			<label for="token">Bearer token (optional)</label>
@@ -104,11 +105,23 @@
 			const form = document.getElementById("form");
 			const btn = document.getElementById("btn");
 			const result = document.getElementById("result");
+			const tokenInput = document.getElementById("token");
+			const storageKey = "bearer_token_{{PROJECT_ID}}";
+
+			// restore token from session storage
+			const saved = sessionStorage.getItem(storageKey);
+			if (saved) tokenInput.value = saved;
 
 			form.addEventListener("submit", async (e) => {
 				e.preventDefault();
-				const token = document.getElementById("token").value
-					.trim();
+				const token = tokenInput.value.trim();
+
+				// persist token in session storage
+				if (token) {
+					sessionStorage.setItem(storageKey, token);
+				} else {
+					sessionStorage.removeItem(storageKey);
+				}
 				const files = document.getElementById("files").files;
 				if (!files.length) return;
 

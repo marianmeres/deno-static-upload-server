@@ -3,37 +3,37 @@
 [![JSR](https://jsr.io/badges/@marianmeres/deno-static-upload-server)](https://jsr.io/@marianmeres/deno-static-upload-server)
 [![License](https://img.shields.io/github/license/marianmeres/deno-static-upload-server)](LICENSE)
 
-A lightweight, self-hosted static file server with a simple upload endpoint. Built for reliable home for static assets without the complexity of a full cloud storage setup.
-
-## Motivation
-
-When running a full-stack app on a cloud platform like Deno Deploy, there is no persistent filesystem available. Any file written during a request simply disappears. This is fine for most application logic, but it creates a problem for file uploads — images, documents, and other assets need to land _somewhere_ permanent.
-
-This server solves that by acting as a dedicated home for static assets on a machine you control. Your cloud app handles all the business logic (resizing, validation, writing metadata to a database), then forwards the final file here for permanent storage. If you later decide to migrate to S3 or Cloudflare R2, you just swap out the upload target — your application logic stays untouched.
+A lightweight, self-hosted static file server with upload endpoint and per-project configuration. Built for reliable home for static assets without the complexity of a full cloud storage setup.
 
 ## Features
 
+- **Per-project configuration** — each project gets its own JSON config with independent auth tokens
 - **Upload endpoint** — accepts `multipart/form-data` file uploads
-- **Static file serving** — serves uploaded files via `@std/http/file-server` (range requests, correct content types, caching headers all included)
-- **Project scoping** — each app gets its own namespace, preventing collisions when sharing one server across multiple projects
-- **Delete endpoint** — remove uploaded files via `DELETE /static/:projectId/*` (requires auth)
-- **Bearer token auth** — optionally restrict uploads to known sources
-- **Subdirectory preservation** — file paths including subdirectories are preserved as-is
-- **Browser upload form** — built-in HTML form at `GET /upload/:projectId` for quick manual uploads
+- **Static file serving** — via `@std/http/file-server` (range requests, content types, caching headers)
+- **Delete endpoint** — remove uploaded files (requires auth)
+- **Plugin architecture** — custom handlers per project for full customization
+- **JWT support** — HS256 token verification for time-scoped access
+- **GET access control** — optional token/JWT requirement for static file serving
+- **Browser upload form** — built-in HTML form at `GET /:projectId`
 - **Zero dependencies** — just Deno standard library
 
 ## Quick start
 
-### Run directly from JSR (no install needed)
+### 1. Create a project config
+
+```bash
+mkdir -p config
+echo '{"uploadTokens": ["my-secret-token"]}' > config/my-app.json
+```
+
+### 2. Run the server
 
 ```bash
 PORT=8000 \
 STATIC_DIR=./static \
-UPLOAD_TOKENS=my-secret-token \
+CONFIG_DIR=./config \
 deno run -A jsr:@marianmeres/deno-static-upload-server
 ```
-
-This starts the server immediately using the built-in CLI entry point. No local files required.
 
 ### Programmatic usage
 
@@ -43,7 +43,7 @@ import { createServer } from "jsr:@marianmeres/deno-static-upload-server/server"
 const server = createServer({
 	port: 8000,
 	staticDir: "./static",
-	uploadTokens: ["your-secret-token"],
+	configDir: "./config",
 });
 
 server.start();
@@ -51,16 +51,31 @@ server.start();
 
 ## Configuration
 
-All options can be set via environment variables (recommended for production) or passed programmatically.
+### Server options (env vars)
 
-| Option             | Env var              | Default    | Description                                               |
-| ------------------ | -------------------- | ---------- | --------------------------------------------------------- |
-| `port`             | `PORT`               | `8000`     | Port to listen on                                         |
-| `staticDir`        | `STATIC_DIR`         | `./static` | Root directory for stored files                           |
-| `uploadTokens`     | `UPLOAD_TOKENS`      | _(none)_   | Comma-separated bearer tokens. If empty, auth is disabled |
-| `uploadPath`       | `UPLOAD_PATH`        | `/upload`  | Route prefix for the upload endpoint                      |
-| `staticRoutePath`  | `STATIC_ROUTE_PATH`  | `/static`  | Route prefix for serving files                            |
-| `enableUploadForm` | `ENABLE_UPLOAD_FORM` | `true`     | Serve the HTML upload form on `GET /upload/:projectId`    |
+| Option             | Env var              | Default    | Description                              |
+| ------------------ | -------------------- | ---------- | ---------------------------------------- |
+| `port`             | `PORT`               | `8000`     | Port to listen on                        |
+| `staticDir`        | `STATIC_DIR`         | `./static` | Root directory for stored files          |
+| `configDir`        | `CONFIG_DIR`         | `./config` | Directory for per-project JSON configs   |
+| `enableUploadForm` | `ENABLE_UPLOAD_FORM` | `true`     | Global default for upload form           |
+| `jwtSecret`        | `JWT_SECRET`         | —          | Shared JWT secret (per-project override) |
+
+### Per-project config (`config/{projectId}.json`)
+
+```json
+{
+	"uploadTokens": ["token-a", "token-b"],
+	"enableUploadForm": true,
+	"enableDelete": true,
+	"plugin": "./plugins/my-project.ts",
+	"jwt": { "secret": "per-project-secret" },
+	"getAccessControl": "public"
+}
+```
+
+- `uploadTokens` (required) — empty array disables auth for uploads
+- `getAccessControl` — `"public"` (default), `"token"`, or `"jwt"` for GET requests
 
 ### Using a `.env` file
 
@@ -72,102 +87,76 @@ deno run --env=.env -A jsr:@marianmeres/deno-static-upload-server
 
 See [API.md](API.md) for complete API documentation.
 
+### Routes
+
+| Method | Path            | Description              |
+| ------ | --------------- | ------------------------ |
+| GET    | `/`             | Version signature        |
+| GET    | `/:projectId`   | Upload form              |
+| POST   | `/:projectId`   | Upload files             |
+| GET    | `/:projectId/*` | Serve static file        |
+| HEAD   | `/:projectId/*` | File info (headers only) |
+| DELETE | `/:projectId/*` | Delete file              |
+
 ### Upload a file
 
-```
-POST /upload/:projectId
-Authorization: Bearer <token>
-Content-Type: multipart/form-data
+```bash
+curl -X POST http://localhost:8000/my-app \
+  -H "Authorization: Bearer my-secret-token" \
+  -F "file=@photo.webp;filename=images/thumbs/photo.webp"
 ```
 
 **Response:**
 
 ```json
-{
-	"uploaded": ["/static/my-app/images/photo.webp"]
-}
-```
-
-### Upload with subdirectory path
-
-Subdirectory structure is set via the `filename` in the multipart form field:
-
-```bash
-curl -X POST http://localhost:8000/upload/my-app \
-  -H "Authorization: Bearer my-secret-token" \
-  -F "file=@photo.webp;filename=images/thumbs/photo.webp"
-```
-
-The file will be stored at `{staticDir}/my-app/images/thumbs/photo.webp`.
-
-In JavaScript:
-
-```ts
-const form = new FormData();
-form.append("file", blob, "images/thumbs/photo.webp");
-//                         ^^^ third argument sets the path
-
-await fetch("http://localhost:8000/upload/my-app", {
-	method: "POST",
-	headers: { Authorization: "Bearer my-secret-token" },
-	body: form,
-});
+{ "uploaded": ["/my-app/images/thumbs/photo.webp"] }
 ```
 
 ### Delete a file
 
 ```
-DELETE /static/:projectId/path/to/file.webp
+DELETE /:projectId/path/to/file.webp
 Authorization: Bearer <token>
 ```
 
 **Response:**
 
 ```json
-{
-	"deleted": "/static/my-app/path/to/file.webp"
+{ "deleted": "/my-app/path/to/file.webp" }
+```
+
+## Plugin system
+
+Create a TypeScript module that default-exports a handler function:
+
+```ts
+// config/plugins/my-project.ts
+export default async function (req, ctx) {
+	// Custom logic here
+	// Return Response to handle, or null to use default handler
+	return ctx.defaultHandler(req);
 }
 ```
 
-Only available when `uploadTokens` are configured. Returns 404 if auth is disabled.
-
-### Serve a file
-
-```
-GET /static/:projectId/path/to/file.webp
-```
-
-Standard HTTP file serving — supports range requests, ETags, and correct `Content-Type` headers out of the box.
-
-### Browser upload form
-
-Visit `GET /upload/:projectId` in a browser to use the built-in upload form. It provides a token input field and file picker. Disable with `ENABLE_UPLOAD_FORM=false` or `enableUploadForm: false`.
+Reference it in your project config: `"plugin": "./plugins/my-project.ts"`
 
 ## Token rotation (zero downtime)
 
-Pass multiple tokens as a comma-separated list:
+Put multiple tokens in the project config:
+
+```json
+{ "uploadTokens": ["old-token", "new-token"] }
+```
+
+Update your app to use the new token, then remove the old one and restart.
+
+## Docker
 
 ```bash
-UPLOAD_TOKENS=old-token,new-token
+docker-compose up
 ```
 
-Update your app to use the new token, then remove the old one from the list and restart. No downtime required.
-
-## Project layout on disk
-
-Files are stored under `{staticDir}/{projectId}/`, so a server shared between multiple apps might look like:
-
-```
-static/
-  my-blog/
-    images/
-      hero.webp
-  my-shop/
-    products/
-      item-42.jpg
-```
-
-Each project is fully isolated — there is no way for one project's uploads to overwrite another's.
+The compose file mounts `./data` for static files and `./config` for project configs.
 
 ## License
 
