@@ -4,12 +4,12 @@ services:
         ports:
             - "${PORT:-9090}:8000"
         volumes:
-            - ./data:/data
-            - ./config:/config
-        env_file:
-            - .env
+            - ${DATA_DIR:-./data}:/data
+            - ${CONFIG_DIR:-./config}:/config
         environment:
             - PORT=8000
             - STATIC_DIR=/data
             - CONFIG_DIR=/config
+            - ENABLE_UPLOAD_FORM=${ENABLE_UPLOAD_FORM:-true}
+            - JWT_SECRET=${JWT_SECRET:-}
         restart: unless-stopped
