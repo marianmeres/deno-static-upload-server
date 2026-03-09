@@ -153,10 +153,26 @@ Update your app to use the new token, then remove the old one and restart.
 ## Docker
 
 ```bash
-docker-compose up
+docker compose up
 ```
 
 The compose file mounts `./data` for static files and `./config` for project configs.
+
+The container runs as a non-root user. Set `PUID` and `PGID` in your `.env` file to
+match your host user so that uploaded files have correct ownership:
+
+```bash
+# Find your UID/GID
+id -u  # e.g. 1000
+id -g  # e.g. 1000
+```
+
+```env
+PUID=1000
+PGID=1000
+```
+
+If not set, defaults to `1000:1000`.
 
 ## License
 

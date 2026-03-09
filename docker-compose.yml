@@ -1,7 +1,7 @@
 services:
     upload-server:
         build: .
-        user: "${UID:-1000}:${GID:-1000}"
+        user: "${PUID:-1000}:${PGID:-1000}"
         ports:
             - "${PORT:-9090}:8000"
         volumes:

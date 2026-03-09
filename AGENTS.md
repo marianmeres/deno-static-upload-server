@@ -61,6 +61,7 @@ example/main.ts        — Example usage
 1. Use tabs for indentation (configured in `deno.json` fmt)
 2. No external dependencies — only `@std/*`
 3. Env vars: `PORT`, `STATIC_DIR`, `CONFIG_DIR`, `ENABLE_UPLOAD_FORM`, `JWT_SECRET`
+   Docker-specific env vars: `PUID`, `PGID` (host user UID/GID for volume ownership, default `1000`)
 4. Project IDs must match `/^[a-zA-Z0-9\-_]+$/`
 5. Project config `uploadTokens` is required (empty array = auth disabled)
 
