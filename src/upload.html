@@ -28,7 +28,7 @@
 				margin-bottom: 0.3rem;
 				color: #555;
 			}
-			input[type="text"], input[type="file"] {
+			input[type="password"], input[type="file"] {
 				width: 100%;
 				padding: 0.5rem 0.6rem;
 				border: 1px solid #ccc;
@@ -86,11 +86,11 @@
 		<form id="form">
 			<label for="token">Bearer token (optional)</label>
 			<input
-				type="text"
+				type="password"
 				id="token"
 				name="token"
 				placeholder="your-secret-token"
-				autocomplete="off"
+				autocomplete="current-password"
 			>
 
 			<label for="files">Files</label>
