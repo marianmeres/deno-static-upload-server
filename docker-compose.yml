@@ -14,3 +14,5 @@ services:
             - ENABLE_UPLOAD_FORM=${ENABLE_UPLOAD_FORM:-true}
             - JWT_SECRET=${JWT_SECRET:-}
         restart: unless-stopped
+        container_name: static-upload-server
+        
