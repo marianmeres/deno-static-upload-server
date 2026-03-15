@@ -1,4 +1,8 @@
-import { clearConfigCache, isValidProjectId, loadProjectConfig } from "./config.ts";
+import {
+	clearConfigCache,
+	isValidProjectId,
+	loadProjectConfig,
+} from "./config.ts";
 import type { ProjectConfig } from "./config.ts";
 import { handleForm } from "./handlers/form.ts";
 import { handleUpload } from "./handlers/upload.ts";
@@ -60,9 +64,20 @@ export function createServer(opts: StaticServerOptions = {}): StaticServer {
 		const url = new URL(req.url);
 		const pathname = url.pathname;
 
-		// GET / — version signature only
-		if (pathname === "/" && req.method === "GET") {
-			return Response.json({ version: VERSION });
+		// GET|HEAD / — version signature only
+		if (
+			pathname === "/" &&
+			(req.method === "GET" || req.method === "HEAD")
+		) {
+			const res = Response.json({ version: VERSION });
+			if (req.method === "HEAD") {
+				res.body?.cancel();
+				return new Response(null, {
+					status: res.status,
+					headers: res.headers,
+				});
+			}
+			return res;
 		}
 
 		// Parse /:projectId[/path/to/file]
@@ -100,10 +115,7 @@ export function createServer(opts: StaticServerOptions = {}): StaticServer {
 			config = loaded;
 		} catch (e) {
 			console.error(e);
-			return new Response(
-				"Server configuration error",
-				{ status: 500 },
-			);
+			return new Response("Server configuration error", { status: 500 });
 		}
 
 		// Apply global enableUploadForm default
@@ -115,9 +127,7 @@ export function createServer(opts: StaticServerOptions = {}): StaticServer {
 		}
 
 		// Default handler for this request
-		async function defaultHandler(
-			r: Request,
-		): Promise<Response> {
+		async function defaultHandler(r: Request): Promise<Response> {
 			return await routeToHandler(
 				r,
 				projectId,
@@ -142,20 +152,11 @@ export function createServer(opts: StaticServerOptions = {}): StaticServer {
 					staticDir: options.staticDir,
 					defaultHandler,
 				};
-				const pluginResponse = await pluginHandler(
-					req,
-					ctx,
-				);
+				const pluginResponse = await pluginHandler(req, ctx);
 				if (pluginResponse) return pluginResponse;
 			} catch (e) {
-				console.error(
-					`Plugin error for project "${projectId}":`,
-					e,
-				);
-				return new Response(
-					"Plugin error",
-					{ status: 500 },
-				);
+				console.error(`Plugin error for project "${projectId}":`, e);
+				return new Response("Plugin error", { status: 500 });
 			}
 		}
 
@@ -170,21 +171,11 @@ export function createServer(opts: StaticServerOptions = {}): StaticServer {
 			console.log(`  Static : ${options.staticDir}`);
 			console.log(`  Routes :`);
 			console.log(`    GET    /            version`);
-			console.log(
-				`    GET    /:projectId   upload form`,
-			);
-			console.log(
-				`    POST   /:projectId   upload files`,
-			);
-			console.log(
-				`    GET    /:projectId/* serve files`,
-			);
-			console.log(
-				`    HEAD   /:projectId/* file info`,
-			);
-			console.log(
-				`    DELETE /:projectId/* delete file`,
-			);
+			console.log(`    GET    /:projectId   upload form`);
+			console.log(`    POST   /:projectId   upload files`);
+			console.log(`    GET    /:projectId/* serve files`);
+			console.log(`    HEAD   /:projectId/* file info`);
+			console.log(`    DELETE /:projectId/* delete file`);
 			return Deno.serve({ port: options.port }, handler);
 		},
 	};
@@ -203,45 +194,32 @@ async function routeToHandler(
 
 	// No file path — project-level routes
 	if (!filePath) {
-		if (method === "GET") {
-			const res = handleForm(
-				req,
-				projectId,
-				config,
-				VERSION,
-			);
-			if (res) return res;
+		if (method === "GET" || method === "HEAD") {
+			const res = handleForm(req, projectId, config, VERSION);
+			if (res) {
+				if (method === "HEAD") {
+					res.body?.cancel();
+					return new Response(null, {
+						status: res.status,
+						headers: res.headers,
+					});
+				}
+				return res;
+			}
 			return new Response("Not found", { status: 404 });
 		}
 		if (method === "POST") {
-			return handleUpload(
-				req,
-				projectId,
-				config,
-				staticDir,
-			);
+			return handleUpload(req, projectId, config, staticDir);
 		}
 		return new Response("Not found", { status: 404 });
 	}
 
 	// File path present — file-level routes
 	if (method === "GET" || method === "HEAD") {
-		return handleServe(
-			req,
-			projectId,
-			config,
-			staticDir,
-			jwtSecret,
-		);
+		return handleServe(req, projectId, config, staticDir, jwtSecret);
 	}
 	if (method === "DELETE") {
-		return handleDelete(
-			req,
-			projectId,
-			filePath,
-			config,
-			staticDir,
-		);
+		return handleDelete(req, projectId, filePath, config, staticDir);
 	}
 
 	return new Response("Not found", { status: 404 });
