@@ -1,3 +1,12 @@
+/**
+ * CLI entry point for the static upload server.
+ *
+ * Reads configuration from environment variables and starts the server.
+ * Run directly with `deno run` or as the default package export.
+ *
+ * @module
+ */
+
 import { createServer } from "./server.ts";
 
 const options: Record<string, unknown> = {};

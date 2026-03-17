@@ -1,3 +1,13 @@
+/**
+ * Programmatic API for the static upload server.
+ *
+ * Provides {@linkcode createServer} to create and start a configured
+ * static file server with per-project configuration, JWT auth, plugin
+ * support, and optional CDN integration.
+ *
+ * @module
+ */
+
 import { clearConfigCache, isValidProjectId, loadProjectConfig } from "./config.ts";
 import type { ProjectConfig } from "./config.ts";
 import { handleForm } from "./handlers/form.ts";
