@@ -7,6 +7,7 @@ interface CloudflareAdapterOptions {
 	purgeUrlPrefix: string;
 	cacheMaxAge: number;
 	cacheSMaxAge: number;
+	staleWhileRevalidate: number;
 }
 
 const CF_API_BASE = "https://api.cloudflare.com/client/v4";
@@ -19,6 +20,7 @@ export class CloudflareCdnAdapter implements CdnAdapter {
 	#apiToken: string;
 	#purgeUrlPrefix: string;
 	#cacheControl: string;
+	#immutableCacheControl: string;
 
 	constructor(opts: CloudflareAdapterOptions) {
 		if (!opts.zoneId || !opts.apiToken) {
@@ -32,15 +34,20 @@ export class CloudflareCdnAdapter implements CdnAdapter {
 		this.#cacheControl = buildCacheControlHeader(
 			opts.cacheMaxAge,
 			opts.cacheSMaxAge,
+			opts.staleWhileRevalidate,
 		);
+		this.#immutableCacheControl = "public, max-age=31536000, immutable";
 	}
 
-	applyCacheHeaders(res: Response): Response {
+	applyCacheHeaders(res: Response, immutable?: boolean): Response {
 		if (res.status < 200 || res.status >= 300) {
 			return res;
 		}
 		const headers = new Headers(res.headers);
-		headers.set("Cache-Control", this.#cacheControl);
+		headers.set(
+			"Cache-Control",
+			immutable ? this.#immutableCacheControl : this.#cacheControl,
+		);
 		return new Response(res.body, {
 			status: res.status,
 			statusText: res.statusText,

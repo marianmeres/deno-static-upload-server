@@ -6,7 +6,7 @@ import { handleServe } from "./handlers/serve.ts";
 import { handleDelete } from "./handlers/delete.ts";
 import { loadPlugin } from "./plugin.ts";
 import type { PluginContext } from "./plugin.ts";
-import { createCdnAdapter } from "./cdn.ts";
+import { createCdnAdapter, noStoreHeaders } from "./cdn.ts";
 import type { CdnAdapter, CdnOptions } from "./cdn.ts";
 
 const { version: VERSION } = await fetch(
@@ -80,7 +80,8 @@ export async function createServer(
 			pathname === "/" &&
 			(req.method === "GET" || req.method === "HEAD")
 		) {
-			const res = Response.json({ version: VERSION });
+			let res = Response.json({ version: VERSION });
+			if (cdnAdapter) res = noStoreHeaders(res);
 			if (req.method === "HEAD") {
 				res.body?.cancel();
 				return new Response(null, {
@@ -216,8 +217,9 @@ async function routeToHandler(
 	// No file path — project-level routes
 	if (!filePath) {
 		if (method === "GET" || method === "HEAD") {
-			const res = handleForm(req, projectId, config, VERSION);
+			let res = handleForm(req, projectId, config, VERSION);
 			if (res) {
+				if (cdn) res = noStoreHeaders(res);
 				if (method === "HEAD") {
 					res.body?.cancel();
 					return new Response(null, {

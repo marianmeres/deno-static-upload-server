@@ -73,19 +73,21 @@ Each project requires a JSON config file at `{configDir}/{projectId}.json`:
 	"enableDelete": true,
 	"plugin": "./plugins/my-project.ts",
 	"jwt": { "secret": "per-project-secret" },
-	"getAccessControl": "public"
+	"getAccessControl": "public",
+	"cacheStrategy": "mutable"
 }
 ```
 
-| Field              | Type       | Required | Default    | Description                                                      |
-| ------------------ | ---------- | -------- | ---------- | ---------------------------------------------------------------- |
-| `uploadTokens`     | `string[]` | **Yes**  | —          | Bearer tokens for upload/delete auth. `[]` = open                |
-| `downloadTokens`   | `string[]` | No       | —          | Bearer tokens for download auth. If non-empty, GET requires auth |
-| `enableUploadForm` | `boolean`  | No       | `true`     | Serve HTML upload form for this project                          |
-| `enableDelete`     | `boolean`  | No       | `true`     | Enable DELETE endpoint (requires tokens)                         |
-| `plugin`           | `string`   | No       | —          | Path to plugin module, relative to configDir                     |
-| `jwt.secret`       | `string`   | No       | —          | Per-project JWT secret (falls back to global)                    |
-| `getAccessControl` | `string`   | No       | `"public"` | `"public"`, `"token"`, or `"jwt"`                                |
+| Field              | Type       | Required | Default     | Description                                                      |
+| ------------------ | ---------- | -------- | ----------- | ---------------------------------------------------------------- |
+| `uploadTokens`     | `string[]` | **Yes**  | —           | Bearer tokens for upload/delete auth. `[]` = open                |
+| `downloadTokens`   | `string[]` | No       | —           | Bearer tokens for download auth. If non-empty, GET requires auth |
+| `enableUploadForm` | `boolean`  | No       | `true`      | Serve HTML upload form for this project                          |
+| `enableDelete`     | `boolean`  | No       | `true`      | Enable DELETE endpoint (requires tokens)                         |
+| `plugin`           | `string`   | No       | —           | Path to plugin module, relative to configDir                     |
+| `jwt.secret`       | `string`   | No       | —           | Per-project JWT secret (falls back to global)                    |
+| `getAccessControl` | `string`   | No       | `"public"`  | `"public"`, `"token"`, or `"jwt"`                                |
+| `cacheStrategy`    | `string`   | No       | `"mutable"` | `"mutable"` or `"immutable"` (for content-hashed filenames)      |
 
 ---
 
@@ -230,7 +232,7 @@ Or with a `.env` file:
 deno run --env=.env -A jsr:@marianmeres/deno-static-upload-server
 ```
 
-**Environment variables:** `PORT`, `STATIC_DIR`, `CONFIG_DIR`, `ENABLE_UPLOAD_FORM`, `JWT_SECRET`, `GLOBAL_TOKEN`, `CDN_PROVIDER`, `CDN_CACHE_PURGE_URL_PREFIX`, `CDN_CACHE_MAX_AGE`, `CDN_CACHE_S_MAXAGE`, `CF_ZONE_ID`, `CF_API_TOKEN`.
+**Environment variables:** `PORT`, `STATIC_DIR`, `CONFIG_DIR`, `ENABLE_UPLOAD_FORM`, `JWT_SECRET`, `GLOBAL_TOKEN`, `CDN_PROVIDER`, `CDN_CACHE_PURGE_URL_PREFIX`, `CDN_CACHE_MAX_AGE`, `CDN_CACHE_S_MAXAGE`, `CDN_STALE_WHILE_REVALIDATE`, `CF_ZONE_ID`, `CF_API_TOKEN`.
 
 ---
 
@@ -242,10 +244,12 @@ Optional, provider-agnostic CDN integration. When configured via the `cdn` optio
 
 ```ts
 interface CdnAdapter {
-	applyCacheHeaders(res: Response): Response;
+	applyCacheHeaders(res: Response, immutable?: boolean): Response;
 	purgeCache(paths: string[]): Promise<void>;
 }
 ```
+
+The `immutable` flag is derived from the project's `cacheStrategy` config field.
 
 ### `CdnOptions`
 
@@ -253,28 +257,38 @@ interface CdnAdapter {
 interface CdnOptions {
 	provider: string; // e.g. "cloudflare"
 	purgeUrlPrefix: string; // e.g. "https://cdn.example.com"
-	cacheMaxAge?: number; // Default: 3600 (1 hour, browser)
+	cacheMaxAge?: number; // Default: 60 (1 minute, browser)
 	cacheSMaxAge?: number; // Default: 604800 (7 days, CDN)
+	staleWhileRevalidate?: number; // Default: 86400 (1 day)
 	[key: string]: unknown; // Provider-specific options
 }
 ```
 
 ### CDN Environment Variables
 
-| Variable                     | Required     | Default  | Description                           |
-| ---------------------------- | ------------ | -------- | ------------------------------------- |
-| `CDN_PROVIDER`               | To enable    | —        | Provider name (e.g. `cloudflare`)     |
-| `CDN_CACHE_PURGE_URL_PREFIX` | When enabled | —        | Public URL prefix for purge URLs      |
-| `CDN_CACHE_MAX_AGE`          | No           | `3600`   | Browser `max-age` in seconds          |
-| `CDN_CACHE_S_MAXAGE`         | No           | `604800` | CDN `s-maxage` in seconds             |
-| `CF_ZONE_ID`                 | Cloudflare   | —        | Cloudflare zone ID                    |
-| `CF_API_TOKEN`               | Cloudflare   | —        | API token with Cache Purge permission |
+| Variable                     | Required     | Default  | Description                              |
+| ---------------------------- | ------------ | -------- | ---------------------------------------- |
+| `CDN_PROVIDER`               | To enable    | —        | Provider name (e.g. `cloudflare`)        |
+| `CDN_CACHE_PURGE_URL_PREFIX` | When enabled | —        | Public URL prefix for purge URLs         |
+| `CDN_CACHE_MAX_AGE`          | No           | `60`     | Browser `max-age` in seconds             |
+| `CDN_CACHE_S_MAXAGE`         | No           | `604800` | CDN `s-maxage` in seconds                |
+| `CDN_STALE_WHILE_REVALIDATE` | No           | `86400`  | Stale-while-revalidate window in seconds |
+| `CF_ZONE_ID`                 | Cloudflare   | —        | Cloudflare zone ID                       |
+| `CF_API_TOKEN`               | Cloudflare   | —        | API token with Cache Purge permission    |
+
+### Cache strategies
+
+Set per project via `"cacheStrategy"` in the project config:
+
+- **`"mutable"`** (default): `Cache-Control: public, max-age=60, s-maxage=604800, stale-while-revalidate=86400`. Browser TTL is short (can't purge browsers); CDN TTL is long (purged on upload/delete). The `max-age`, `s-maxage`, and `stale-while-revalidate` values are configurable via env vars.
+- **`"immutable"`**: `Cache-Control: public, max-age=31536000, immutable`. For content-hashed filenames that never change at the same URL. Ignores the configurable TTL values.
 
 ### Behavior
 
-- **Serve**: 2xx responses for static files get `Cache-Control: public, max-age={cacheMaxAge}, s-maxage={cacheSMaxAge}`
+- **Serve**: 2xx responses for static files get cache headers based on the project's `cacheStrategy`
 - **Upload**: After successful upload, purges the uploaded paths from CDN cache (handles overwrites)
-- **Delete**: After successful deletion, purges the deleted path from CDN cache
+- **Delete**: After successful deletion, purges the deleted path from CDN cache (regardless of cache strategy)
+- **Non-static responses**: Version endpoint (`GET /`) and upload form (`GET /:projectId`) get `Cache-Control: no-store`
 - **Disabled**: When `CDN_PROVIDER` is not set, behavior is identical to a server without CDN support
 
 ---

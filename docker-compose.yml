@@ -18,6 +18,7 @@ services:
             - CDN_CACHE_PURGE_URL_PREFIX=${CDN_CACHE_PURGE_URL_PREFIX:-}
             - CDN_CACHE_MAX_AGE=${CDN_CACHE_MAX_AGE:-}
             - CDN_CACHE_S_MAXAGE=${CDN_CACHE_S_MAXAGE:-}
+            - CDN_STALE_WHILE_REVALIDATE=${CDN_STALE_WHILE_REVALIDATE:-}
             - CF_ZONE_ID=${CF_ZONE_ID:-}
             - CF_API_TOKEN=${CF_API_TOKEN:-}
         restart: unless-stopped

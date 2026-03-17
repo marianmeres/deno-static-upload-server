@@ -35,6 +35,11 @@ if (cdnProvider) {
 	const cacheSMaxAge = Number(Deno.env.get("CDN_CACHE_S_MAXAGE"));
 	if (cacheSMaxAge > 0) cdn.cacheSMaxAge = cacheSMaxAge;
 
+	const staleWhileRevalidate = Number(
+		Deno.env.get("CDN_STALE_WHILE_REVALIDATE"),
+	);
+	if (staleWhileRevalidate > 0) cdn.staleWhileRevalidate = staleWhileRevalidate;
+
 	// Provider-specific env vars
 	const cfZoneId = Deno.env.get("CF_ZONE_ID");
 	if (cfZoneId) cdn.zoneId = cfZoneId;

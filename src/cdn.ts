@@ -7,8 +7,12 @@
 
 /** CDN adapter that the server calls for cache headers and purge operations. */
 export interface CdnAdapter {
-	/** Apply CDN-appropriate cache headers to a served file response. */
-	applyCacheHeaders(res: Response): Response;
+	/**
+	 * Apply CDN-appropriate cache headers to a served file response.
+	 * When `immutable` is true, uses long-lived cache headers suitable for
+	 * content-hashed filenames that never change at the same URL.
+	 */
+	applyCacheHeaders(res: Response, immutable?: boolean): Response;
 	/** Purge the given file paths from CDN cache. Must never throw. */
 	purgeCache(paths: string[]): Promise<void>;
 }
@@ -19,16 +23,33 @@ export interface CdnOptions {
 	purgeUrlPrefix: string;
 	cacheMaxAge?: number;
 	cacheSMaxAge?: number;
+	staleWhileRevalidate?: number;
 	/** Provider-specific options are passed through. */
 	[key: string]: unknown;
 }
 
-const DEFAULT_CACHE_MAX_AGE = 3600; // 1 hour (browser)
-const DEFAULT_CACHE_S_MAXAGE = 604800; // 7 days (CDN)
+const DEFAULT_CACHE_MAX_AGE = 60; // 1 minute (browser — keep short, can't purge browsers)
+const DEFAULT_CACHE_S_MAXAGE = 604800; // 7 days (CDN — purged on upload/delete)
+const DEFAULT_STALE_WHILE_REVALIDATE = 86400; // 1 day
 
 /** Build a standard Cache-Control header value. */
-export function buildCacheControlHeader(maxAge: number, sMaxAge: number): string {
-	return `public, max-age=${maxAge}, s-maxage=${sMaxAge}`;
+export function buildCacheControlHeader(
+	maxAge: number,
+	sMaxAge: number,
+	staleWhileRevalidate: number,
+): string {
+	return `public, max-age=${maxAge}, s-maxage=${sMaxAge}, stale-while-revalidate=${staleWhileRevalidate}`;
+}
+
+/** Set Cache-Control: no-store on a response to prevent CDN caching. */
+export function noStoreHeaders(res: Response): Response {
+	const headers = new Headers(res.headers);
+	headers.set("Cache-Control", "no-store");
+	return new Response(res.body, {
+		status: res.status,
+		statusText: res.statusText,
+		headers,
+	});
 }
 
 /**
@@ -44,6 +65,8 @@ export async function createCdnAdapter(
 
 	const cacheMaxAge = opts.cacheMaxAge ?? DEFAULT_CACHE_MAX_AGE;
 	const cacheSMaxAge = opts.cacheSMaxAge ?? DEFAULT_CACHE_S_MAXAGE;
+	const staleWhileRevalidate = opts.staleWhileRevalidate ??
+		DEFAULT_STALE_WHILE_REVALIDATE;
 	const purgeUrlPrefix = opts.purgeUrlPrefix.replace(/\/+$/, ""); // strip trailing slash
 
 	switch (opts.provider) {
@@ -55,6 +78,7 @@ export async function createCdnAdapter(
 				purgeUrlPrefix,
 				cacheMaxAge,
 				cacheSMaxAge,
+				staleWhileRevalidate,
 			});
 		}
 		default:

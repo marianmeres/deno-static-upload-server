@@ -69,8 +69,10 @@ export async function handleServe(
 			status: res.status,
 			headers: res.headers,
 		});
-		return cdn ? cdn.applyCacheHeaders(headRes) : headRes;
+		const immutable = config.cacheStrategy === "immutable";
+		return cdn ? cdn.applyCacheHeaders(headRes, immutable) : headRes;
 	}
 
-	return cdn ? cdn.applyCacheHeaders(res) : res;
+	const immutable = config.cacheStrategy === "immutable";
+	return cdn ? cdn.applyCacheHeaders(res, immutable) : res;
 }

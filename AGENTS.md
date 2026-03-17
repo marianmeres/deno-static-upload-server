@@ -55,8 +55,11 @@ example/main.ts        — Example usage
 
 Provider-agnostic CDN integration via `CdnAdapter` interface in `src/cdn.ts`:
 
-- `applyCacheHeaders(res)` — adds `Cache-Control` with `max-age` and `s-maxage` to 2xx responses
-- `purgeCache(paths[])` — purges file paths from CDN cache (fire-and-forget, never throws)
+- `applyCacheHeaders(res, immutable?)` — adds `Cache-Control` to 2xx responses. Mutable: `public, max-age=60, s-maxage=604800, stale-while-revalidate=86400`. Immutable: `public, max-age=31536000, immutable`.
+- `purgeCache(paths[])` — purges file paths from CDN cache (fire-and-forget, never throws). Always called on upload/delete regardless of cache strategy.
+- Non-static responses (version endpoint, upload form) get `Cache-Control: no-store` when CDN is enabled.
+
+Per-project `"cacheStrategy"` in project config: `"mutable"` (default) or `"immutable"` (for content-hashed filenames).
 
 Factory `createCdnAdapter(opts)` dispatches on `opts.provider`. Adding a new provider: create `src/cdn/{provider}.ts` implementing `CdnAdapter`, add a case in the factory switch.
 
@@ -78,7 +81,7 @@ Cloudflare adapter (`src/cdn/cloudflare.ts`): uses CF API `POST /zones/{zoneId}/
 1. Use tabs for indentation (configured in `deno.json` fmt)
 2. No external dependencies — only `@std/*` and native `fetch`
 3. Server env vars: `PORT`, `STATIC_DIR`, `CONFIG_DIR`, `ENABLE_UPLOAD_FORM`, `JWT_SECRET`, `GLOBAL_TOKEN`
-   CDN env vars: `CDN_PROVIDER`, `CDN_CACHE_PURGE_URL_PREFIX`, `CDN_CACHE_MAX_AGE`, `CDN_CACHE_S_MAXAGE`
+   CDN env vars: `CDN_PROVIDER`, `CDN_CACHE_PURGE_URL_PREFIX`, `CDN_CACHE_MAX_AGE`, `CDN_CACHE_S_MAXAGE`, `CDN_STALE_WHILE_REVALIDATE`
    Cloudflare env vars: `CF_ZONE_ID`, `CF_API_TOKEN`
    Docker-specific env vars: `PUID`, `PGID` (host user UID/GID for volume ownership, default `1000`)
 4. Project IDs must match `/^[a-zA-Z0-9\-_]+$/`

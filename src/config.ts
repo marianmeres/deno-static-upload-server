@@ -3,6 +3,9 @@ import { join } from "@std/path";
 /** Access control mode for GET requests. */
 export type GetAccessControl = "public" | "token" | "jwt";
 
+/** CDN cache strategy for a project's files. */
+export type CacheStrategy = "mutable" | "immutable";
+
 /** JWT configuration for a project. */
 export interface JwtConfig {
 	/** Per-project JWT secret. Falls back to global JWT_SECRET if not set. */
@@ -25,6 +28,8 @@ export interface ProjectConfig {
 	downloadTokens?: string[];
 	/** Access control for GET file requests. @default "public" */
 	getAccessControl?: GetAccessControl;
+	/** CDN cache strategy. "immutable" for content-hashed filenames. @default "mutable" */
+	cacheStrategy?: CacheStrategy;
 }
 
 const configCache = new Map<string, ProjectConfig>();
@@ -118,6 +123,7 @@ export async function loadProjectConfig(
 				config.getAccessControl === "jwt"
 			? config.getAccessControl
 			: "public",
+		cacheStrategy: config.cacheStrategy === "immutable" ? "immutable" : "mutable",
 	};
 
 	// JWT config

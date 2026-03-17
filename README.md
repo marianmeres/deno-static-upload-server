@@ -56,18 +56,19 @@ server.start();
 
 ### Server options (env vars)
 
-| Option               | Env var                      | Default    | Description                              |
-| -------------------- | ---------------------------- | ---------- | ---------------------------------------- |
-| `port`               | `PORT`                       | `8000`     | Port to listen on                        |
-| `staticDir`          | `STATIC_DIR`                 | `./static` | Root directory for stored files          |
-| `configDir`          | `CONFIG_DIR`                 | `./config` | Directory for per-project JSON configs   |
-| `enableUploadForm`   | `ENABLE_UPLOAD_FORM`         | `true`     | Global default for upload form           |
-| `jwtSecret`          | `JWT_SECRET`                 | —          | Shared JWT secret (per-project override) |
-| `globalToken`        | `GLOBAL_TOKEN`               | —          | Superuser token for all projects         |
-| `cdn.provider`       | `CDN_PROVIDER`               | —          | CDN provider name (e.g. `cloudflare`)    |
-| `cdn.purgeUrlPrefix` | `CDN_CACHE_PURGE_URL_PREFIX` | —          | Public URL prefix for cache purge        |
-| `cdn.cacheMaxAge`    | `CDN_CACHE_MAX_AGE`          | `3600`     | Browser cache max-age (seconds)          |
-| `cdn.cacheSMaxAge`   | `CDN_CACHE_S_MAXAGE`         | `604800`   | CDN cache s-maxage (seconds)             |
+| Option                     | Env var                      | Default    | Description                              |
+| -------------------------- | ---------------------------- | ---------- | ---------------------------------------- |
+| `port`                     | `PORT`                       | `8000`     | Port to listen on                        |
+| `staticDir`                | `STATIC_DIR`                 | `./static` | Root directory for stored files          |
+| `configDir`                | `CONFIG_DIR`                 | `./config` | Directory for per-project JSON configs   |
+| `enableUploadForm`         | `ENABLE_UPLOAD_FORM`         | `true`     | Global default for upload form           |
+| `jwtSecret`                | `JWT_SECRET`                 | —          | Shared JWT secret (per-project override) |
+| `globalToken`              | `GLOBAL_TOKEN`               | —          | Superuser token for all projects         |
+| `cdn.provider`             | `CDN_PROVIDER`               | —          | CDN provider name (e.g. `cloudflare`)    |
+| `cdn.purgeUrlPrefix`       | `CDN_CACHE_PURGE_URL_PREFIX` | —          | Public URL prefix for cache purge        |
+| `cdn.cacheMaxAge`          | `CDN_CACHE_MAX_AGE`          | `60`       | Browser cache max-age (seconds)          |
+| `cdn.cacheSMaxAge`         | `CDN_CACHE_S_MAXAGE`         | `604800`   | CDN cache s-maxage (seconds)             |
+| `cdn.staleWhileRevalidate` | `CDN_STALE_WHILE_REVALIDATE` | `86400`    | Stale-while-revalidate window (seconds)  |
 
 ### Per-project config (`config/{projectId}.json`)
 
@@ -79,13 +80,15 @@ server.start();
 	"enableDelete": true,
 	"plugin": "./plugins/my-project.ts",
 	"jwt": { "secret": "per-project-secret" },
-	"getAccessControl": "public"
+	"getAccessControl": "public",
+	"cacheStrategy": "mutable"
 }
 ```
 
 - `uploadTokens` (required) — empty array disables auth for uploads
 - `downloadTokens` (optional) — if non-empty, GET requests require a matching bearer token
 - `getAccessControl` — `"public"` (default), `"token"`, or `"jwt"` for GET requests
+- `cacheStrategy` — `"mutable"` (default) or `"immutable"`. Use `"immutable"` for projects that use content-hashed filenames — files get `Cache-Control: public, max-age=31536000, immutable`. CDN purge still happens on delete.
 
 ### Global token
 
@@ -143,16 +146,23 @@ Authorization: Bearer <token>
 
 Optional, provider-agnostic CDN support. When configured, the server:
 
-- Adds `Cache-Control` headers (`max-age` + `s-maxage`) to served static files
+- Adds `Cache-Control` headers to served static files
 - Purges CDN cache when files are uploaded (overwritten) or deleted
+- Sets `Cache-Control: no-store` on non-static responses (version endpoint, upload form)
+
+Cache headers depend on the project's `cacheStrategy`:
+
+- **`"mutable"`** (default): `public, max-age=60, s-maxage=604800, stale-while-revalidate=86400` — browser caches 1 min (can't purge browsers), CDN caches 7 days (purged on change)
+- **`"immutable"`**: `public, max-age=31536000, immutable` — cache forever, ideal for content-hashed filenames
 
 ### Cloudflare setup
 
 ```env
 CDN_PROVIDER=cloudflare
 CDN_CACHE_PURGE_URL_PREFIX=https://cdn.example.com
-# CDN_CACHE_MAX_AGE=3600
+# CDN_CACHE_MAX_AGE=60
 # CDN_CACHE_S_MAXAGE=604800
+# CDN_STALE_WHILE_REVALIDATE=86400
 CF_ZONE_ID=your-zone-id
 CF_API_TOKEN=your-api-token
 ```

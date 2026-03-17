@@ -59,6 +59,7 @@ Deno.test("cdn: cloudflare adapter applyCacheHeaders", async () => {
 		purgeUrlPrefix: "https://cdn.example.com",
 		cacheMaxAge: 60,
 		cacheSMaxAge: 120,
+		staleWhileRevalidate: 300,
 	});
 
 	// 200 response gets headers
@@ -66,7 +67,15 @@ Deno.test("cdn: cloudflare adapter applyCacheHeaders", async () => {
 	const modified = adapter.applyCacheHeaders(res200);
 	assertEquals(
 		modified.headers.get("Cache-Control"),
-		"public, max-age=60, s-maxage=120",
+		"public, max-age=60, s-maxage=120, stale-while-revalidate=300",
+	);
+
+	// immutable flag uses long-lived headers
+	const res200b = new Response("ok", { status: 200 });
+	const immutable = adapter.applyCacheHeaders(res200b, true);
+	assertEquals(
+		immutable.headers.get("Cache-Control"),
+		"public, max-age=31536000, immutable",
 	);
 
 	// 404 response is not modified
@@ -86,6 +95,7 @@ Deno.test("cdn: cloudflare adapter constructor validation", async () => {
 			purgeUrlPrefix: "https://x.com",
 			cacheMaxAge: 60,
 			cacheSMaxAge: 120,
+			staleWhileRevalidate: 300,
 		});
 	} catch {
 		threw = true;
