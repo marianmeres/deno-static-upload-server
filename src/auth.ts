@@ -4,9 +4,15 @@ export function extractBearerToken(req: Request): string | null {
 	return header.startsWith("Bearer ") ? header.slice(7) : null;
 }
 
-/** Check if request has a valid bearer token from the given token list. */
-export function isAuthorized(req: Request, tokens: string[]): boolean {
-	if (tokens.length === 0) return true; // auth disabled
+/** Check if request has a valid bearer token from the given list OR matches the global token. */
+export function isAuthorized(
+	req: Request,
+	tokens: string[],
+	globalToken?: string,
+): boolean {
+	if (tokens.length === 0) return true; // no auth configured for this project
 	const token = extractBearerToken(req);
-	return token !== null && tokens.includes(token);
+	if (!token) return false;
+	if (globalToken && token === globalToken) return true;
+	return tokens.includes(token);
 }

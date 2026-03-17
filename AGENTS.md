@@ -14,7 +14,7 @@
 src/server.ts          — Core: createServer(), handler, StaticServerOptions
 src/cli.ts             — CLI entry point (reads env vars, calls createServer)
 src/config.ts          — ProjectConfig interface, loadProjectConfig(), cache
-src/auth.ts            — isAuthorized(), extractBearerToken()
+src/auth.ts            — isAuthorized(req, tokens, globalToken?), extractBearerToken()
 src/jwt.ts             — HS256 JWT verification via Web Crypto API
 src/plugin.ts          — PluginHandler type, PluginContext, loadPlugin()
 src/handlers/form.ts   — GET /:projectId (upload form)
@@ -39,6 +39,8 @@ example/main.ts        — Example usage
 - `createServer(opts)` returns `{ handler, start }` — handler is the raw `(Request) => Promise<Response>`, start calls `Deno.serve()`
 - Per-project JSON config in `CONFIG_DIR/{projectId}.json` — lazy-loaded, cached forever
 - `uploadTokens` is **required** in each project config (empty array = no auth)
+- `downloadTokens` is optional per project — if non-empty, GET requests require a matching bearer token
+- `GLOBAL_TOKEN` env var provides a superuser token accepted for upload/delete/download across all projects (does not change per-project auth requirements)
 - Plugin system: optional `"plugin"` field in project config points to a .ts module
 - Tests call `handler()` directly (no HTTP server needed)
 - `upload.html` uses `{{PROJECT_ID}}` and `{{VERSION}}` template placeholders
@@ -60,7 +62,7 @@ example/main.ts        — Example usage
 
 1. Use tabs for indentation (configured in `deno.json` fmt)
 2. No external dependencies — only `@std/*`
-3. Env vars: `PORT`, `STATIC_DIR`, `CONFIG_DIR`, `ENABLE_UPLOAD_FORM`, `JWT_SECRET`
+3. Env vars: `PORT`, `STATIC_DIR`, `CONFIG_DIR`, `ENABLE_UPLOAD_FORM`, `JWT_SECRET`, `GLOBAL_TOKEN`
    Docker-specific env vars: `PUID`, `PGID` (host user UID/GID for volume ownership, default `1000`)
 4. Project IDs must match `/^[a-zA-Z0-9\-_]+$/`
 5. Project config `uploadTokens` is required (empty array = auth disabled)
@@ -68,5 +70,5 @@ example/main.ts        — Example usage
 ## Before Making Changes
 
 - [ ] Read `src/server.ts` — main routing and handler orchestration
-- [ ] Run `deno task test` — all 30 tests must pass
+- [ ] Run `deno task test` — all 43 tests must pass
 - [ ] Run `deno fmt` after changes

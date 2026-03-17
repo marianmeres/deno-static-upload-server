@@ -1,7 +1,6 @@
 import { serveDir } from "@std/http/file-server";
 import type { ProjectConfig } from "../config.ts";
-import { isAuthorized } from "../auth.ts";
-import { extractBearerToken } from "../auth.ts";
+import { extractBearerToken, isAuthorized } from "../auth.ts";
 import { looksLikeJwt, verifyJwt } from "../jwt.ts";
 
 /**
@@ -13,35 +12,47 @@ export async function handleServe(
 	config: ProjectConfig,
 	staticDir: string,
 	jwtSecret?: string,
+	globalToken?: string,
 ): Promise<Response> {
-	// Access control check
-	if (config.getAccessControl === "token") {
-		if (!isAuthorized(req, config.uploadTokens)) {
+	// Download tokens check (takes precedence over getAccessControl)
+	const downloadTokens = config.downloadTokens ?? [];
+	if (downloadTokens.length > 0) {
+		if (!isAuthorized(req, downloadTokens, globalToken)) {
+			return new Response("Unauthorized", { status: 401 });
+		}
+	} else if (config.getAccessControl === "token") {
+		if (
+			!isAuthorized(req, config.uploadTokens, globalToken)
+		) {
 			return new Response("Unauthorized", { status: 401 });
 		}
 	} else if (config.getAccessControl === "jwt") {
-		const token = extractBearerToken(req);
-		if (!token) {
-			return new Response("Unauthorized", { status: 401 });
-		}
-		const secret = config.jwt?.secret ?? jwtSecret;
-		if (!secret) {
-			return new Response("JWT not configured", { status: 500 });
-		}
-		const payload = await verifyJwt(token, secret);
-		if (!payload) {
-			return new Response("Unauthorized", { status: 401 });
+		// Global token bypasses JWT check
+		const bearer = extractBearerToken(req);
+		if (globalToken && bearer === globalToken) {
+			// authorized via global token
+		} else {
+			if (!bearer) {
+				return new Response("Unauthorized", { status: 401 });
+			}
+			const secret = config.jwt?.secret ?? jwtSecret;
+			if (!secret) {
+				return new Response("JWT not configured", { status: 500 });
+			}
+			const payload = await verifyJwt(bearer, secret);
+			if (!payload) {
+				return new Response("Unauthorized", { status: 401 });
+			}
 		}
 	}
 
 	// serveDir only accepts GET, so convert HEAD→GET and strip body
-	const effectiveReq =
-		req.method === "HEAD"
-			? new Request(req.url, {
-					method: "GET",
-					headers: req.headers,
-				})
-			: req;
+	const effectiveReq = req.method === "HEAD"
+		? new Request(req.url, {
+			method: "GET",
+			headers: req.headers,
+		})
+		: req;
 
 	const res = await serveDir(effectiveReq, {
 		fsRoot: staticDir,

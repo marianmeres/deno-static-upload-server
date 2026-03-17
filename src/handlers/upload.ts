@@ -10,8 +10,9 @@ export async function handleUpload(
 	projectId: string,
 	config: ProjectConfig,
 	staticDir: string,
+	globalToken?: string,
 ): Promise<Response> {
-	if (!isAuthorized(req, config.uploadTokens)) {
+	if (!isAuthorized(req, config.uploadTokens, globalToken)) {
 		return new Response("Unauthorized", { status: 401 });
 	}
 
@@ -36,8 +37,7 @@ export async function handleUpload(
 			.split("/")
 			.map((segment) => segment.replace(/[^a-zA-Z0-9.\-_]/g, "_"))
 			.filter(
-				(segment) =>
-					segment.length > 0 && segment !== "." && segment !== "..",
+				(segment) => segment.length > 0 && segment !== "." && segment !== "..",
 			)
 			.join("/");
 
@@ -56,7 +56,9 @@ export async function handleUpload(
 			await Deno.writeFile(tmpPath, value.stream());
 			await Deno.rename(tmpPath, destPath);
 		} catch (e) {
-			try { await Deno.remove(tmpPath); } catch { /* ignore cleanup errors */ }
+			try {
+				await Deno.remove(tmpPath);
+			} catch { /* ignore cleanup errors */ }
 			throw e;
 		}
 

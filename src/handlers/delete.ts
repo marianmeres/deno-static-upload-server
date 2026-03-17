@@ -11,13 +11,14 @@ export async function handleDelete(
 	filePath: string,
 	config: ProjectConfig,
 	staticDir: string,
+	globalToken?: string,
 ): Promise<Response> {
 	// Delete only available when auth tokens are configured and delete is enabled
 	if (config.uploadTokens.length === 0 || config.enableDelete === false) {
 		return new Response("Not found", { status: 404 });
 	}
 
-	if (!isAuthorized(req, config.uploadTokens)) {
+	if (!isAuthorized(req, config.uploadTokens, globalToken)) {
 		return new Response("Unauthorized", { status: 401 });
 	}
 

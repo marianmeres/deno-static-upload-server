@@ -707,6 +707,292 @@ Deno.test("jwt: token access control on GET", async () => {
 	}
 });
 
+// ─── Global token ───────────────────────────────────────────────────
+
+Deno.test("global token: works for upload", async () => {
+	const { staticDir, configDir } = await setup("proj", {
+		uploadTokens: ["local"],
+	});
+	try {
+		const { handler } = createServer({
+			staticDir,
+			configDir,
+			globalToken: "master-key",
+		});
+		const req = makeUploadRequest(
+			"proj",
+			[{ name: "a.txt", content: "hello" }],
+			"master-key",
+		);
+		const res = await handler(req);
+		assertEquals(res.status, 200);
+	} finally {
+		await cleanup(staticDir, configDir);
+	}
+});
+
+Deno.test("global token: works for delete", async () => {
+	const { staticDir, configDir } = await setup("proj", {
+		uploadTokens: ["local"],
+	});
+	try {
+		const { handler } = createServer({
+			staticDir,
+			configDir,
+			globalToken: "master-key",
+		});
+
+		// Upload a file first
+		const uploadReq = makeUploadRequest(
+			"proj",
+			[{ name: "del.txt", content: "data" }],
+			"local",
+		);
+		await handler(uploadReq);
+
+		// Delete with global token
+		const deleteReq = new Request(`${BASE}/proj/del.txt`, {
+			method: "DELETE",
+			headers: { Authorization: "Bearer master-key" },
+		});
+		const res = await handler(deleteReq);
+		assertEquals(res.status, 200);
+		const body = await res.json();
+		assertEquals(body.deleted, "/proj/del.txt");
+	} finally {
+		await cleanup(staticDir, configDir);
+	}
+});
+
+Deno.test("global token: does not enable delete on open project", async () => {
+	const { staticDir, configDir } = await setup("proj", {
+		uploadTokens: [],
+	});
+	try {
+		const { handler } = createServer({
+			staticDir,
+			configDir,
+			globalToken: "master-key",
+		});
+
+		// Upload (open access since uploadTokens is empty)
+		const uploadReq = makeUploadRequest("proj", [
+			{ name: "del.txt", content: "data" },
+		]);
+		await handler(uploadReq);
+
+		// Delete should still return 404 — open project has no delete endpoint
+		const deleteReq = new Request(`${BASE}/proj/del.txt`, {
+			method: "DELETE",
+			headers: { Authorization: "Bearer master-key" },
+		});
+		const res = await handler(deleteReq);
+		assertEquals(res.status, 404);
+	} finally {
+		await cleanup(staticDir, configDir);
+	}
+});
+
+Deno.test("global token: wrong token returns 401", async () => {
+	const { staticDir, configDir } = await setup("proj", {
+		uploadTokens: ["local"],
+	});
+	try {
+		const { handler } = createServer({
+			staticDir,
+			configDir,
+			globalToken: "master-key",
+		});
+		const req = makeUploadRequest(
+			"proj",
+			[{ name: "a.txt", content: "hello" }],
+			"wrong-key",
+		);
+		const res = await handler(req);
+		assertEquals(res.status, 401);
+	} finally {
+		await cleanup(staticDir, configDir);
+	}
+});
+
+Deno.test("global token: per-project token still works", async () => {
+	const { staticDir, configDir } = await setup("proj", {
+		uploadTokens: ["local"],
+	});
+	try {
+		const { handler } = createServer({
+			staticDir,
+			configDir,
+			globalToken: "master-key",
+		});
+		const req = makeUploadRequest(
+			"proj",
+			[{ name: "a.txt", content: "hello" }],
+			"local",
+		);
+		const res = await handler(req);
+		assertEquals(res.status, 200);
+	} finally {
+		await cleanup(staticDir, configDir);
+	}
+});
+
+// ─── Download tokens ────────────────────────────────────────────────
+
+Deno.test("download tokens: protects GET", async () => {
+	const { staticDir, configDir } = await setup("proj", {
+		uploadTokens: [],
+		downloadTokens: ["dl-secret"],
+	});
+	try {
+		const { handler } = createServer({ staticDir, configDir });
+
+		// Upload a file (open access)
+		const uploadReq = makeUploadRequest("proj", [
+			{ name: "data.txt", content: "protected" },
+		]);
+		await handler(uploadReq);
+
+		// GET without token
+		const req = new Request(`${BASE}/proj/data.txt`);
+		const res = await handler(req);
+		assertEquals(res.status, 401);
+	} finally {
+		await cleanup(staticDir, configDir);
+	}
+});
+
+Deno.test("download tokens: correct token grants access", async () => {
+	const { staticDir, configDir } = await setup("proj", {
+		uploadTokens: [],
+		downloadTokens: ["dl-secret"],
+	});
+	try {
+		const { handler } = createServer({ staticDir, configDir });
+
+		const uploadReq = makeUploadRequest("proj", [
+			{ name: "data.txt", content: "protected" },
+		]);
+		await handler(uploadReq);
+
+		const req = new Request(`${BASE}/proj/data.txt`, {
+			headers: { Authorization: "Bearer dl-secret" },
+		});
+		const res = await handler(req);
+		assertEquals(res.status, 200);
+		const text = await res.text();
+		assertEquals(text, "protected");
+	} finally {
+		await cleanup(staticDir, configDir);
+	}
+});
+
+Deno.test("download tokens: wrong token returns 401", async () => {
+	const { staticDir, configDir } = await setup("proj", {
+		uploadTokens: [],
+		downloadTokens: ["dl-secret"],
+	});
+	try {
+		const { handler } = createServer({ staticDir, configDir });
+
+		const uploadReq = makeUploadRequest("proj", [
+			{ name: "data.txt", content: "protected" },
+		]);
+		await handler(uploadReq);
+
+		const req = new Request(`${BASE}/proj/data.txt`, {
+			headers: { Authorization: "Bearer wrong" },
+		});
+		const res = await handler(req);
+		assertEquals(res.status, 401);
+	} finally {
+		await cleanup(staticDir, configDir);
+	}
+});
+
+Deno.test("download tokens: no downloadTokens = public access", async () => {
+	const { staticDir, configDir } = await setup("proj", {
+		uploadTokens: [],
+	});
+	try {
+		const { handler } = createServer({ staticDir, configDir });
+
+		const uploadReq = makeUploadRequest("proj", [
+			{ name: "data.txt", content: "public" },
+		]);
+		await handler(uploadReq);
+
+		const req = new Request(`${BASE}/proj/data.txt`);
+		const res = await handler(req);
+		assertEquals(res.status, 200);
+		const text = await res.text();
+		assertEquals(text, "public");
+	} finally {
+		await cleanup(staticDir, configDir);
+	}
+});
+
+Deno.test("download tokens: global token bypasses downloadTokens", async () => {
+	const { staticDir, configDir } = await setup("proj", {
+		uploadTokens: [],
+		downloadTokens: ["dl-secret"],
+	});
+	try {
+		const { handler } = createServer({
+			staticDir,
+			configDir,
+			globalToken: "master-key",
+		});
+
+		// Upload (open access since uploadTokens is empty)
+		const uploadReq = makeUploadRequest("proj", [
+			{ name: "data.txt", content: "protected" },
+		]);
+		await handler(uploadReq);
+
+		const req = new Request(`${BASE}/proj/data.txt`, {
+			headers: { Authorization: "Bearer master-key" },
+		});
+		const res = await handler(req);
+		assertEquals(res.status, 200);
+		const text = await res.text();
+		assertEquals(text, "protected");
+	} finally {
+		await cleanup(staticDir, configDir);
+	}
+});
+
+Deno.test("download tokens: global token bypasses getAccessControl token", async () => {
+	const { staticDir, configDir } = await setup("proj", {
+		uploadTokens: ["secret"],
+		getAccessControl: "token",
+	});
+	try {
+		const { handler } = createServer({
+			staticDir,
+			configDir,
+			globalToken: "master-key",
+		});
+
+		const uploadReq = makeUploadRequest(
+			"proj",
+			[{ name: "data.txt", content: "token-protected" }],
+			"secret",
+		);
+		await handler(uploadReq);
+
+		// Global token should work even though getAccessControl is "token"
+		const req = new Request(`${BASE}/proj/data.txt`, {
+			headers: { Authorization: "Bearer master-key" },
+		});
+		const res = await handler(req);
+		assertEquals(res.status, 200);
+		await res.text();
+	} finally {
+		await cleanup(staticDir, configDir);
+	}
+});
+
 // ─── Root-level files ───────────────────────────────────────────────
 
 Deno.test(

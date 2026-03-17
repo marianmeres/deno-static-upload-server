@@ -21,6 +21,8 @@ export interface ProjectConfig {
 	plugin?: string;
 	/** JWT configuration. */
 	jwt?: JwtConfig;
+	/** Bearer tokens for download authorization. Non-empty array enables download auth. */
+	downloadTokens?: string[];
 	/** Access control for GET file requests. @default "public" */
 	getAccessControl?: GetAccessControl;
 }
@@ -88,16 +90,34 @@ export async function loadProjectConfig(
 		}
 	}
 
+	// Validate downloadTokens if present
+	if (config.downloadTokens !== undefined) {
+		if (!Array.isArray(config.downloadTokens)) {
+			throw new Error(
+				`Invalid "downloadTokens" (must be an array) in: ${configPath}`,
+			);
+		}
+		for (const t of config.downloadTokens) {
+			if (typeof t !== "string") {
+				throw new Error(
+					`All downloadTokens must be strings in: ${configPath}`,
+				);
+			}
+		}
+	}
+
 	const result: ProjectConfig = {
 		uploadTokens: config.uploadTokens as string[],
+		downloadTokens: Array.isArray(config.downloadTokens)
+			? (config.downloadTokens as string[])
+			: undefined,
 		enableUploadForm: config.enableUploadForm !== false,
 		enableDelete: config.enableDelete !== false,
 		plugin: typeof config.plugin === "string" ? config.plugin : undefined,
-		getAccessControl:
-			config.getAccessControl === "token" ||
-			config.getAccessControl === "jwt"
-				? config.getAccessControl
-				: "public",
+		getAccessControl: config.getAccessControl === "token" ||
+				config.getAccessControl === "jwt"
+			? config.getAccessControl
+			: "public",
 	};
 
 	// JWT config

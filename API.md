@@ -46,6 +46,7 @@ interface StaticServerOptions {
 	configDir?: string; // Default: "./config"
 	enableUploadForm?: boolean; // Default: true
 	jwtSecret?: string; // Default: undefined
+	globalToken?: string; // Default: undefined
 }
 ```
 
@@ -56,6 +57,7 @@ interface StaticServerOptions {
 | `configDir`        | `string`  | `"./config"` | Directory containing per-project JSON config files |
 | `enableUploadForm` | `boolean` | `true`       | Global default for upload form visibility          |
 | `jwtSecret`        | `string`  | —            | Shared JWT secret (per-project secrets override)   |
+| `globalToken`      | `string`  | —            | Superuser token accepted across all projects       |
 
 ### `ProjectConfig`
 
@@ -64,6 +66,7 @@ Each project requires a JSON config file at `{configDir}/{projectId}.json`:
 ```json
 {
 	"uploadTokens": ["token-a", "token-b"],
+	"downloadTokens": ["dl-token"],
 	"enableUploadForm": true,
 	"enableDelete": true,
 	"plugin": "./plugins/my-project.ts",
@@ -72,14 +75,15 @@ Each project requires a JSON config file at `{configDir}/{projectId}.json`:
 }
 ```
 
-| Field              | Type       | Required | Default    | Description                                       |
-| ------------------ | ---------- | -------- | ---------- | ------------------------------------------------- |
-| `uploadTokens`     | `string[]` | **Yes**  | —          | Bearer tokens for upload/delete auth. `[]` = open |
-| `enableUploadForm` | `boolean`  | No       | `true`     | Serve HTML upload form for this project           |
-| `enableDelete`     | `boolean`  | No       | `true`     | Enable DELETE endpoint (requires tokens)          |
-| `plugin`           | `string`   | No       | —          | Path to plugin module, relative to configDir      |
-| `jwt.secret`       | `string`   | No       | —          | Per-project JWT secret (falls back to global)     |
-| `getAccessControl` | `string`   | No       | `"public"` | `"public"`, `"token"`, or `"jwt"`                 |
+| Field              | Type       | Required | Default    | Description                                                      |
+| ------------------ | ---------- | -------- | ---------- | ---------------------------------------------------------------- |
+| `uploadTokens`     | `string[]` | **Yes**  | —          | Bearer tokens for upload/delete auth. `[]` = open                |
+| `downloadTokens`   | `string[]` | No       | —          | Bearer tokens for download auth. If non-empty, GET requires auth |
+| `enableUploadForm` | `boolean`  | No       | `true`     | Serve HTML upload form for this project                          |
+| `enableDelete`     | `boolean`  | No       | `true`     | Enable DELETE endpoint (requires tokens)                         |
+| `plugin`           | `string`   | No       | —          | Path to plugin module, relative to configDir                     |
+| `jwt.secret`       | `string`   | No       | —          | Per-project JWT secret (falls back to global)                    |
+| `getAccessControl` | `string`   | No       | `"public"` | `"public"`, `"token"`, or `"jwt"`                                |
 
 ---
 
@@ -103,7 +107,7 @@ Upload one or more files via `multipart/form-data`.
 
 **Headers:**
 
-- `Authorization: Bearer <token>` — Required when project's `uploadTokens` is non-empty.
+- `Authorization: Bearer <token>` — Required when project's `uploadTokens` is non-empty. The global token (`GLOBAL_TOKEN`) is also accepted.
 
 **Path parameters:**
 
@@ -165,11 +169,12 @@ Serves static files. Powered by `@std/http/file-server` with CORS enabled.
 
 Supports range requests, ETags, and correct `Content-Type` headers.
 
-Access can be restricted via the project's `getAccessControl` setting:
+Access can be restricted via `downloadTokens` or the project's `getAccessControl` setting:
 
-- `"public"` — no auth required (default)
-- `"token"` — requires valid bearer token from project's `uploadTokens`
-- `"jwt"` — requires valid JWT signed with the project or global secret
+- **`downloadTokens`** — if non-empty in project config, GET requires a bearer token from this list (or `GLOBAL_TOKEN`). Takes precedence over `getAccessControl`.
+- `"public"` — no auth required (default `getAccessControl`)
+- `"token"` — requires valid bearer token from project's `uploadTokens` (or `GLOBAL_TOKEN`)
+- `"jwt"` — requires valid JWT signed with the project or global secret (or `GLOBAL_TOKEN`)
 
 ---
 
@@ -223,7 +228,7 @@ Or with a `.env` file:
 deno run --env=.env -A jsr:@marianmeres/deno-static-upload-server
 ```
 
-**Environment variables:** `PORT`, `STATIC_DIR`, `CONFIG_DIR`, `ENABLE_UPLOAD_FORM`, `JWT_SECRET`.
+**Environment variables:** `PORT`, `STATIC_DIR`, `CONFIG_DIR`, `ENABLE_UPLOAD_FORM`, `JWT_SECRET`, `GLOBAL_TOKEN`.
 
 ---
 
@@ -233,5 +238,7 @@ deno run --env=.env -A jsr:@marianmeres/deno-static-upload-server
 - **Path traversal prevention:** `..` and `.` segments are stripped from uploaded filenames. Resolved paths are verified to remain within the static directory.
 - **Filename sanitization:** Non-alphanumeric characters (except `.`, `-`, `_`) are replaced with `_`.
 - **Auth:** Per-project `uploadTokens`. When non-empty, uploads and deletes require a valid `Authorization: Bearer <token>` header.
+- **Download auth:** Per-project `downloadTokens`. When non-empty, GET requests require a matching bearer token.
+- **Global token:** `GLOBAL_TOKEN` env var provides a superuser token accepted for uploads, deletes, and downloads across all projects. Does not change per-project auth requirements.
 - **JWT:** Optional HS256 JWT verification for time-scoped tokens. Configurable per-project or globally.
 - **GET access control:** Optional token or JWT requirement for static file serving.

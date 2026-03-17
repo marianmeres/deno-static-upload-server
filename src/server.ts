@@ -1,8 +1,4 @@
-import {
-	clearConfigCache,
-	isValidProjectId,
-	loadProjectConfig,
-} from "./config.ts";
+import { clearConfigCache, isValidProjectId, loadProjectConfig } from "./config.ts";
 import type { ProjectConfig } from "./config.ts";
 import { handleForm } from "./handlers/form.ts";
 import { handleUpload } from "./handlers/upload.ts";
@@ -27,17 +23,25 @@ export interface StaticServerOptions {
 	enableUploadForm?: boolean;
 	/** Shared JWT secret (per-project secrets override this). */
 	jwtSecret?: string;
+	/** Global token that grants upload, delete, and download access across all projects. */
+	globalToken?: string;
 }
 
-const DEFAULT_OPTIONS: Required<Omit<StaticServerOptions, "jwtSecret">> & {
-	jwtSecret?: string;
-} = {
-	port: 8000,
-	staticDir: "./static",
-	configDir: "./config",
-	enableUploadForm: true,
-	jwtSecret: undefined,
-};
+const DEFAULT_OPTIONS:
+	& Required<
+		Omit<StaticServerOptions, "jwtSecret" | "globalToken">
+	>
+	& {
+		jwtSecret?: string;
+		globalToken?: string;
+	} = {
+		port: 8000,
+		staticDir: "./static",
+		configDir: "./config",
+		enableUploadForm: true,
+		jwtSecret: undefined,
+		globalToken: undefined,
+	};
 
 /** Static server instance returned by {@linkcode createServer}. */
 export interface StaticServer {
@@ -135,6 +139,7 @@ export function createServer(opts: StaticServerOptions = {}): StaticServer {
 				config,
 				options.staticDir,
 				options.jwtSecret,
+				options.globalToken,
 			);
 		}
 
@@ -189,6 +194,7 @@ async function routeToHandler(
 	config: ProjectConfig,
 	staticDir: string,
 	jwtSecret?: string,
+	globalToken?: string,
 ): Promise<Response> {
 	const method = req.method;
 
@@ -209,17 +215,31 @@ async function routeToHandler(
 			return new Response("Not found", { status: 404 });
 		}
 		if (method === "POST") {
-			return handleUpload(req, projectId, config, staticDir);
+			return handleUpload(req, projectId, config, staticDir, globalToken);
 		}
 		return new Response("Not found", { status: 404 });
 	}
 
 	// File path present — file-level routes
 	if (method === "GET" || method === "HEAD") {
-		return handleServe(req, projectId, config, staticDir, jwtSecret);
+		return handleServe(
+			req,
+			projectId,
+			config,
+			staticDir,
+			jwtSecret,
+			globalToken,
+		);
 	}
 	if (method === "DELETE") {
-		return handleDelete(req, projectId, filePath, config, staticDir);
+		return handleDelete(
+			req,
+			projectId,
+			filePath,
+			config,
+			staticDir,
+			globalToken,
+		);
 	}
 
 	return new Response("Not found", { status: 404 });

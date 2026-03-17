@@ -14,6 +14,8 @@ A lightweight, self-hosted static file server with upload endpoint and per-proje
 - **Plugin architecture** — custom handlers per project for full customization
 - **JWT support** — HS256 token verification for time-scoped access
 - **GET access control** — optional token/JWT requirement for static file serving
+- **Download tokens** — per-project bearer tokens for download protection
+- **Global token** — superuser token for cross-project upload, delete, and download access
 - **Browser upload form** — built-in HTML form at `GET /:projectId`
 - **Zero dependencies** — just Deno standard library
 
@@ -60,12 +62,14 @@ server.start();
 | `configDir`        | `CONFIG_DIR`         | `./config` | Directory for per-project JSON configs   |
 | `enableUploadForm` | `ENABLE_UPLOAD_FORM` | `true`     | Global default for upload form           |
 | `jwtSecret`        | `JWT_SECRET`         | —          | Shared JWT secret (per-project override) |
+| `globalToken`      | `GLOBAL_TOKEN`       | —          | Superuser token for all projects         |
 
 ### Per-project config (`config/{projectId}.json`)
 
 ```json
 {
 	"uploadTokens": ["token-a", "token-b"],
+	"downloadTokens": ["dl-token"],
 	"enableUploadForm": true,
 	"enableDelete": true,
 	"plugin": "./plugins/my-project.ts",
@@ -75,7 +79,12 @@ server.start();
 ```
 
 - `uploadTokens` (required) — empty array disables auth for uploads
+- `downloadTokens` (optional) — if non-empty, GET requests require a matching bearer token
 - `getAccessControl` — `"public"` (default), `"token"`, or `"jwt"` for GET requests
+
+### Global token
+
+Set `GLOBAL_TOKEN` in your `.env` to define a superuser token that is accepted for uploads, deletes, and downloads across all projects. It does not change per-project auth requirements — open projects (with empty `uploadTokens`) remain open.
 
 ### Using a `.env` file
 

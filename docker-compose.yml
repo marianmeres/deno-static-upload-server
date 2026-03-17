@@ -13,6 +13,6 @@ services:
             - CONFIG_DIR=/config
             - ENABLE_UPLOAD_FORM=${ENABLE_UPLOAD_FORM:-true}
             - JWT_SECRET=${JWT_SECRET:-}
+            - GLOBAL_TOKEN=${GLOBAL_TOKEN:-}
         restart: unless-stopped
         container_name: static-upload-server
-        
