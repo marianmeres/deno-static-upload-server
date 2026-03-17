@@ -6,6 +6,8 @@ import { handleServe } from "./handlers/serve.ts";
 import { handleDelete } from "./handlers/delete.ts";
 import { loadPlugin } from "./plugin.ts";
 import type { PluginContext } from "./plugin.ts";
+import { createCdnAdapter } from "./cdn.ts";
+import type { CdnAdapter, CdnOptions } from "./cdn.ts";
 
 const { version: VERSION } = await fetch(
 	new URL("../deno.json", import.meta.url),
@@ -25,11 +27,13 @@ export interface StaticServerOptions {
 	jwtSecret?: string;
 	/** Global token that grants upload, delete, and download access across all projects. */
 	globalToken?: string;
+	/** CDN adapter options. Omit to disable CDN integration. */
+	cdn?: Partial<CdnOptions>;
 }
 
 const DEFAULT_OPTIONS:
 	& Required<
-		Omit<StaticServerOptions, "jwtSecret" | "globalToken">
+		Omit<StaticServerOptions, "jwtSecret" | "globalToken" | "cdn">
 	>
 	& {
 		jwtSecret?: string;
@@ -52,7 +56,7 @@ export interface StaticServer {
 }
 
 // Re-export for convenience
-export type { PluginContext, ProjectConfig };
+export type { CdnAdapter, CdnOptions, PluginContext, ProjectConfig };
 export { clearConfigCache };
 
 /**
@@ -61,8 +65,11 @@ export { clearConfigCache };
  * @param opts Server configuration options.
  * @returns A server object with a `handler` function and a `start` method.
  */
-export function createServer(opts: StaticServerOptions = {}): StaticServer {
+export async function createServer(
+	opts: StaticServerOptions = {},
+): Promise<StaticServer> {
 	const options = { ...DEFAULT_OPTIONS, ...opts };
+	const cdnAdapter = await createCdnAdapter(options.cdn);
 
 	async function handler(req: Request): Promise<Response> {
 		const url = new URL(req.url);
@@ -101,6 +108,9 @@ export function createServer(opts: StaticServerOptions = {}): StaticServer {
 					"",
 					{ uploadTokens: [] },
 					options.staticDir,
+					undefined,
+					undefined,
+					cdnAdapter,
 				);
 			}
 			return new Response("Not found", { status: 404 });
@@ -140,6 +150,7 @@ export function createServer(opts: StaticServerOptions = {}): StaticServer {
 				options.staticDir,
 				options.jwtSecret,
 				options.globalToken,
+				cdnAdapter,
 			);
 		}
 
@@ -174,6 +185,9 @@ export function createServer(opts: StaticServerOptions = {}): StaticServer {
 			console.log(`Listening on :${options.port}`);
 			console.log(`  Config : ${options.configDir}`);
 			console.log(`  Static : ${options.staticDir}`);
+			if (cdnAdapter) {
+				console.log(`  CDN    : ${options.cdn?.provider}`);
+			}
 			console.log(`  Routes :`);
 			console.log(`    GET    /            version`);
 			console.log(`    GET    /:projectId   upload form`);
@@ -195,6 +209,7 @@ async function routeToHandler(
 	staticDir: string,
 	jwtSecret?: string,
 	globalToken?: string,
+	cdn?: CdnAdapter,
 ): Promise<Response> {
 	const method = req.method;
 
@@ -215,20 +230,21 @@ async function routeToHandler(
 			return new Response("Not found", { status: 404 });
 		}
 		if (method === "POST") {
-			return handleUpload(req, projectId, config, staticDir, globalToken);
+			return handleUpload(req, projectId, config, staticDir, globalToken, cdn);
 		}
 		return new Response("Not found", { status: 404 });
 	}
 
 	// File path present — file-level routes
 	if (method === "GET" || method === "HEAD") {
-		return handleServe(
+		return await handleServe(
 			req,
 			projectId,
 			config,
 			staticDir,
 			jwtSecret,
 			globalToken,
+			cdn,
 		);
 	}
 	if (method === "DELETE") {
@@ -239,6 +255,7 @@ async function routeToHandler(
 			config,
 			staticDir,
 			globalToken,
+			cdn,
 		);
 	}
 

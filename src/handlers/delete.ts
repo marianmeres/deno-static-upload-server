@@ -1,6 +1,7 @@
 import { join, resolve } from "@std/path";
 import type { ProjectConfig } from "../config.ts";
 import { isAuthorized } from "../auth.ts";
+import type { CdnAdapter } from "../cdn.ts";
 
 /**
  * Handle DELETE /:projectId/path/to/file — delete a single file.
@@ -12,6 +13,7 @@ export async function handleDelete(
 	config: ProjectConfig,
 	staticDir: string,
 	globalToken?: string,
+	cdn?: CdnAdapter,
 ): Promise<Response> {
 	// Delete only available when auth tokens are configured and delete is enabled
 	if (config.uploadTokens.length === 0 || config.enableDelete === false) {
@@ -55,7 +57,8 @@ export async function handleDelete(
 
 	await Deno.remove(destPath);
 
-	return Response.json({
-		deleted: `/${projectId}/${safePath}`,
-	});
+	const deletedPath = `/${projectId}/${safePath}`;
+	if (cdn) await cdn.purgeCache([deletedPath]);
+
+	return Response.json({ deleted: deletedPath });
 }

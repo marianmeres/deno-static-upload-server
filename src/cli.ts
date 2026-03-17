@@ -21,6 +21,30 @@ if (jwtSecret) options.jwtSecret = jwtSecret;
 const globalToken = Deno.env.get("GLOBAL_TOKEN");
 if (globalToken) options.globalToken = globalToken;
 
-const server = createServer(options);
+// CDN integration (optional)
+const cdnProvider = Deno.env.get("CDN_PROVIDER");
+if (cdnProvider) {
+	const cdn: Record<string, unknown> = { provider: cdnProvider };
+
+	const purgeUrlPrefix = Deno.env.get("CDN_CACHE_PURGE_URL_PREFIX");
+	if (purgeUrlPrefix) cdn.purgeUrlPrefix = purgeUrlPrefix;
+
+	const cacheMaxAge = Number(Deno.env.get("CDN_CACHE_MAX_AGE"));
+	if (cacheMaxAge > 0) cdn.cacheMaxAge = cacheMaxAge;
+
+	const cacheSMaxAge = Number(Deno.env.get("CDN_CACHE_S_MAXAGE"));
+	if (cacheSMaxAge > 0) cdn.cacheSMaxAge = cacheSMaxAge;
+
+	// Provider-specific env vars
+	const cfZoneId = Deno.env.get("CF_ZONE_ID");
+	if (cfZoneId) cdn.zoneId = cfZoneId;
+
+	const cfApiToken = Deno.env.get("CF_API_TOKEN");
+	if (cfApiToken) cdn.apiToken = cfApiToken;
+
+	options.cdn = cdn;
+}
+
+const server = await createServer(options);
 
 server.start();

@@ -1,6 +1,7 @@
 import { dirname, join, resolve } from "@std/path";
 import type { ProjectConfig } from "../config.ts";
 import { isAuthorized } from "../auth.ts";
+import type { CdnAdapter } from "../cdn.ts";
 
 /**
  * Handle POST /:projectId — upload file(s).
@@ -11,6 +12,7 @@ export async function handleUpload(
 	config: ProjectConfig,
 	staticDir: string,
 	globalToken?: string,
+	cdn?: CdnAdapter,
 ): Promise<Response> {
 	if (!isAuthorized(req, config.uploadTokens, globalToken)) {
 		return new Response("Unauthorized", { status: 401 });
@@ -68,6 +70,8 @@ export async function handleUpload(
 	if (uploaded.length === 0) {
 		return new Response("No files received", { status: 400 });
 	}
+
+	if (cdn) await cdn.purgeCache(uploaded);
 
 	return Response.json({ uploaded });
 }

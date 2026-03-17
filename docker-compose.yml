@@ -14,5 +14,11 @@ services:
             - ENABLE_UPLOAD_FORM=${ENABLE_UPLOAD_FORM:-true}
             - JWT_SECRET=${JWT_SECRET:-}
             - GLOBAL_TOKEN=${GLOBAL_TOKEN:-}
+            - CDN_PROVIDER=${CDN_PROVIDER:-}
+            - CDN_CACHE_PURGE_URL_PREFIX=${CDN_CACHE_PURGE_URL_PREFIX:-}
+            - CDN_CACHE_MAX_AGE=${CDN_CACHE_MAX_AGE:-}
+            - CDN_CACHE_S_MAXAGE=${CDN_CACHE_S_MAXAGE:-}
+            - CF_ZONE_ID=${CF_ZONE_ID:-}
+            - CF_API_TOKEN=${CF_API_TOKEN:-}
         restart: unless-stopped
         container_name: static-upload-server

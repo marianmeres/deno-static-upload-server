@@ -1,7 +1,8 @@
 import { serveDir } from "@std/http/file-server";
 import type { ProjectConfig } from "../config.ts";
 import { extractBearerToken, isAuthorized } from "../auth.ts";
-import { looksLikeJwt, verifyJwt } from "../jwt.ts";
+import { verifyJwt } from "../jwt.ts";
+import type { CdnAdapter } from "../cdn.ts";
 
 /**
  * Handle GET/HEAD /:projectId/path/to/file — serve static files.
@@ -13,6 +14,7 @@ export async function handleServe(
 	staticDir: string,
 	jwtSecret?: string,
 	globalToken?: string,
+	cdn?: CdnAdapter,
 ): Promise<Response> {
 	// Download tokens check (takes precedence over getAccessControl)
 	const downloadTokens = config.downloadTokens ?? [];
@@ -63,11 +65,12 @@ export async function handleServe(
 	if (req.method === "HEAD") {
 		// Close the body stream to avoid resource leaks
 		res.body?.cancel();
-		return new Response(null, {
+		const headRes = new Response(null, {
 			status: res.status,
 			headers: res.headers,
 		});
+		return cdn ? cdn.applyCacheHeaders(headRes) : headRes;
 	}
 
-	return res;
+	return cdn ? cdn.applyCacheHeaders(res) : res;
 }
