@@ -4,13 +4,13 @@
 
 ### `createServer(options?)`
 
-Creates a static upload server instance.
+Creates a static upload server instance. This is an **async** function due to CDN adapter initialization.
 
 **Parameters:**
 
 - `options` (`StaticServerOptions`, optional) — Server configuration. All fields optional with sensible defaults.
 
-**Returns:** `{ handler, start }`
+**Returns:** `Promise<{ handler, start }>`
 
 - `handler(req: Request): Promise<Response>` — The raw request handler. Useful for testing or embedding in another server.
 - `start(): Deno.HttpServer` — Starts listening and returns the `Deno.HttpServer` instance.
@@ -20,7 +20,7 @@ Creates a static upload server instance.
 ```ts
 import { createServer } from "jsr:@marianmeres/deno-static-upload-server/server";
 
-const { handler, start } = createServer({
+const { handler, start } = await createServer({
 	port: 8080,
 	staticDir: "/var/data/uploads",
 	configDir: "/var/data/config",
@@ -47,17 +47,19 @@ interface StaticServerOptions {
 	enableUploadForm?: boolean; // Default: true
 	jwtSecret?: string; // Default: undefined
 	globalToken?: string; // Default: undefined
+	cdn?: Partial<CdnOptions>; // Default: undefined (disabled)
 }
 ```
 
-| Field              | Type      | Default      | Description                                        |
-| ------------------ | --------- | ------------ | -------------------------------------------------- |
-| `port`             | `number`  | `8000`       | Port to listen on                                  |
-| `staticDir`        | `string`  | `"./static"` | Root directory for stored files                    |
-| `configDir`        | `string`  | `"./config"` | Directory containing per-project JSON config files |
-| `enableUploadForm` | `boolean` | `true`       | Global default for upload form visibility          |
-| `jwtSecret`        | `string`  | —            | Shared JWT secret (per-project secrets override)   |
-| `globalToken`      | `string`  | —            | Superuser token accepted across all projects       |
+| Field              | Type                  | Default      | Description                                        |
+| ------------------ | --------------------- | ------------ | -------------------------------------------------- |
+| `port`             | `number`              | `8000`       | Port to listen on                                  |
+| `staticDir`        | `string`              | `"./static"` | Root directory for stored files                    |
+| `configDir`        | `string`              | `"./config"` | Directory containing per-project JSON config files |
+| `enableUploadForm` | `boolean`             | `true`       | Global default for upload form visibility          |
+| `jwtSecret`        | `string`              | —            | Shared JWT secret (per-project secrets override)   |
+| `globalToken`      | `string`              | —            | Superuser token accepted across all projects       |
+| `cdn`              | `Partial<CdnOptions>` | —            | CDN adapter options. Omit to disable               |
 
 ### `ProjectConfig`
 
@@ -228,7 +230,52 @@ Or with a `.env` file:
 deno run --env=.env -A jsr:@marianmeres/deno-static-upload-server
 ```
 
-**Environment variables:** `PORT`, `STATIC_DIR`, `CONFIG_DIR`, `ENABLE_UPLOAD_FORM`, `JWT_SECRET`, `GLOBAL_TOKEN`.
+**Environment variables:** `PORT`, `STATIC_DIR`, `CONFIG_DIR`, `ENABLE_UPLOAD_FORM`, `JWT_SECRET`, `GLOBAL_TOKEN`, `CDN_PROVIDER`, `CDN_CACHE_PURGE_URL_PREFIX`, `CDN_CACHE_MAX_AGE`, `CDN_CACHE_S_MAXAGE`, `CF_ZONE_ID`, `CF_API_TOKEN`.
+
+---
+
+## CDN Adapter System
+
+Optional, provider-agnostic CDN integration. When configured via the `cdn` option (or `CDN_*` env vars), the server adds cache headers to served files and purges the CDN cache on upload/delete.
+
+### `CdnAdapter`
+
+```ts
+interface CdnAdapter {
+	applyCacheHeaders(res: Response): Response;
+	purgeCache(paths: string[]): Promise<void>;
+}
+```
+
+### `CdnOptions`
+
+```ts
+interface CdnOptions {
+	provider: string; // e.g. "cloudflare"
+	purgeUrlPrefix: string; // e.g. "https://cdn.example.com"
+	cacheMaxAge?: number; // Default: 3600 (1 hour, browser)
+	cacheSMaxAge?: number; // Default: 604800 (7 days, CDN)
+	[key: string]: unknown; // Provider-specific options
+}
+```
+
+### CDN Environment Variables
+
+| Variable                     | Required     | Default  | Description                           |
+| ---------------------------- | ------------ | -------- | ------------------------------------- |
+| `CDN_PROVIDER`               | To enable    | —        | Provider name (e.g. `cloudflare`)     |
+| `CDN_CACHE_PURGE_URL_PREFIX` | When enabled | —        | Public URL prefix for purge URLs      |
+| `CDN_CACHE_MAX_AGE`          | No           | `3600`   | Browser `max-age` in seconds          |
+| `CDN_CACHE_S_MAXAGE`         | No           | `604800` | CDN `s-maxage` in seconds             |
+| `CF_ZONE_ID`                 | Cloudflare   | —        | Cloudflare zone ID                    |
+| `CF_API_TOKEN`               | Cloudflare   | —        | API token with Cache Purge permission |
+
+### Behavior
+
+- **Serve**: 2xx responses for static files get `Cache-Control: public, max-age={cacheMaxAge}, s-maxage={cacheSMaxAge}`
+- **Upload**: After successful upload, purges the uploaded paths from CDN cache (handles overwrites)
+- **Delete**: After successful deletion, purges the deleted path from CDN cache
+- **Disabled**: When `CDN_PROVIDER` is not set, behavior is identical to a server without CDN support
 
 ---
 

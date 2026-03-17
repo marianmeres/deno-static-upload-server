@@ -17,6 +17,7 @@ A lightweight, self-hosted static file server with upload endpoint and per-proje
 - **Download tokens** — per-project bearer tokens for download protection
 - **Global token** — superuser token for cross-project upload, delete, and download access
 - **Browser upload form** — built-in HTML form at `GET /:projectId`
+- **CDN integration** — optional, provider-agnostic CDN support (cache headers, purge on upload/delete). Cloudflare adapter included
 - **Zero dependencies** — just Deno standard library
 
 ## Quick start
@@ -42,7 +43,7 @@ deno run -A jsr:@marianmeres/deno-static-upload-server
 ```ts
 import { createServer } from "jsr:@marianmeres/deno-static-upload-server/server";
 
-const server = createServer({
+const server = await createServer({
 	port: 8000,
 	staticDir: "./static",
 	configDir: "./config",
@@ -55,14 +56,18 @@ server.start();
 
 ### Server options (env vars)
 
-| Option             | Env var              | Default    | Description                              |
-| ------------------ | -------------------- | ---------- | ---------------------------------------- |
-| `port`             | `PORT`               | `8000`     | Port to listen on                        |
-| `staticDir`        | `STATIC_DIR`         | `./static` | Root directory for stored files          |
-| `configDir`        | `CONFIG_DIR`         | `./config` | Directory for per-project JSON configs   |
-| `enableUploadForm` | `ENABLE_UPLOAD_FORM` | `true`     | Global default for upload form           |
-| `jwtSecret`        | `JWT_SECRET`         | —          | Shared JWT secret (per-project override) |
-| `globalToken`      | `GLOBAL_TOKEN`       | —          | Superuser token for all projects         |
+| Option               | Env var                      | Default    | Description                              |
+| -------------------- | ---------------------------- | ---------- | ---------------------------------------- |
+| `port`               | `PORT`                       | `8000`     | Port to listen on                        |
+| `staticDir`          | `STATIC_DIR`                 | `./static` | Root directory for stored files          |
+| `configDir`          | `CONFIG_DIR`                 | `./config` | Directory for per-project JSON configs   |
+| `enableUploadForm`   | `ENABLE_UPLOAD_FORM`         | `true`     | Global default for upload form           |
+| `jwtSecret`          | `JWT_SECRET`                 | —          | Shared JWT secret (per-project override) |
+| `globalToken`        | `GLOBAL_TOKEN`               | —          | Superuser token for all projects         |
+| `cdn.provider`       | `CDN_PROVIDER`               | —          | CDN provider name (e.g. `cloudflare`)    |
+| `cdn.purgeUrlPrefix` | `CDN_CACHE_PURGE_URL_PREFIX` | —          | Public URL prefix for cache purge        |
+| `cdn.cacheMaxAge`    | `CDN_CACHE_MAX_AGE`          | `3600`     | Browser cache max-age (seconds)          |
+| `cdn.cacheSMaxAge`   | `CDN_CACHE_S_MAXAGE`         | `604800`   | CDN cache s-maxage (seconds)             |
 
 ### Per-project config (`config/{projectId}.json`)
 
@@ -133,6 +138,32 @@ Authorization: Bearer <token>
 ```json
 { "deleted": "/my-app/path/to/file.webp" }
 ```
+
+## CDN integration
+
+Optional, provider-agnostic CDN support. When configured, the server:
+
+- Adds `Cache-Control` headers (`max-age` + `s-maxage`) to served static files
+- Purges CDN cache when files are uploaded (overwritten) or deleted
+
+### Cloudflare setup
+
+```env
+CDN_PROVIDER=cloudflare
+CDN_CACHE_PURGE_URL_PREFIX=https://cdn.example.com
+# CDN_CACHE_MAX_AGE=3600
+# CDN_CACHE_S_MAXAGE=604800
+CF_ZONE_ID=your-zone-id
+CF_API_TOKEN=your-api-token
+```
+
+The API token needs the **Cache Purge** permission for your zone.
+
+When `CDN_PROVIDER` is not set, CDN integration is completely disabled with no behavior changes.
+
+### Adding a custom CDN provider
+
+Implement the `CdnAdapter` interface from `src/cdn.ts` and add a case in `createCdnAdapter()`. See `src/cdn/cloudflare.ts` for reference.
 
 ## Plugin system
 
