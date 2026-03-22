@@ -23,7 +23,7 @@
     "deploy": "bash deploy.sh"
   },
   "imports": {
-    "@std/assert": "jsr:@std/assert@1",
+    "@std/assert": "jsr:@std/assert@^1.0.19",
     "@std/http": "jsr:@std/http@^1.0.25",
     "@std/path": "jsr:@std/path@^1.1.4"
   },
