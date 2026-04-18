@@ -1,4 +1,4 @@
-import { resolve } from "@std/path";
+import { relative, resolve, toFileUrl } from "@std/path";
 import type { ProjectConfig } from "./config.ts";
 
 /** Context passed to plugin handlers. */
@@ -28,23 +28,36 @@ const pluginCache = new Map<string, PluginHandler>();
 
 /**
  * Load a plugin module from the given path (relative to configDir).
+ *
  * The module must default-export a PluginHandler function.
- * Plugins are cached after first load.
+ * Plugins are cached after first load (keyed by absolute path).
+ *
+ * For safety, pluginPath must resolve to a location inside configDir.
  */
 export async function loadPlugin(
 	configDir: string,
 	pluginPath: string,
 ): Promise<PluginHandler> {
-	const absPath = resolve(configDir, pluginPath);
+	const absConfigDir = resolve(configDir);
+	const absPath = resolve(absConfigDir, pluginPath);
+
+	// Sandbox: plugin must resolve inside configDir.
+	const rel = relative(absConfigDir, absPath);
+	if (rel.startsWith("..") || rel === "" || rel.startsWith("/")) {
+		throw new Error(
+			`Plugin path must resolve inside configDir: ${pluginPath}`,
+		);
+	}
 
 	const cached = pluginCache.get(absPath);
 	if (cached) return cached;
 
-	const mod = await import(absPath);
+	// Convert to file:// URL so dynamic import works cross-platform.
+	const mod = await import(toFileUrl(absPath).href);
 
 	if (typeof mod.default !== "function") {
 		throw new Error(
-			`Plugin must default-export a handler function: ${absPath}`,
+			`Plugin must default-export a handler function: ${pluginPath}`,
 		);
 	}
 

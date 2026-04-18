@@ -121,7 +121,11 @@ Deno.test(
 		clearConfigCache();
 		await Deno.writeTextFile(join(staticDir, "favicon.ico"), "icon-data");
 		try {
-			const handler = await createHandler({ staticDir, configDir });
+			const handler = await createHandler({
+				staticDir,
+				configDir,
+				rootFiles: ["favicon.ico"],
+			});
 			const req = new Request(`${BASE}/favicon.ico`);
 			const res = await handler(req);
 			assertEquals(res.status, 200);

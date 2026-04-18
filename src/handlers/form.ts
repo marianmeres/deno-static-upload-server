@@ -1,22 +1,31 @@
 import type { ProjectConfig } from "../config.ts";
 
-const UPLOAD_HTML = await fetch(
-	new URL("../upload.html", import.meta.url),
-).then((r) => r.text());
+let uploadHtmlPromise: Promise<string> | null = null;
+
+function loadUploadHtml(): Promise<string> {
+	if (!uploadHtmlPromise) {
+		uploadHtmlPromise = fetch(new URL("../upload.html", import.meta.url))
+			.then((r) => r.text());
+	}
+	return uploadHtmlPromise;
+}
 
 /**
  * Handle GET /:projectId — serve the HTML upload form.
  * Returns null if the upload form is disabled for this project.
  */
-export function handleForm(
+export async function handleForm(
 	_req: Request,
 	projectId: string,
 	config: ProjectConfig,
 	version: string,
-): Response | null {
-	if (config.enableUploadForm === false) return null;
+	defaultEnableForm: boolean,
+): Promise<Response | null> {
+	const enabled = config.enableUploadForm ?? defaultEnableForm;
+	if (!enabled) return null;
 
-	const html = UPLOAD_HTML
+	const template = await loadUploadHtml();
+	const html = template
 		.replaceAll("{{PROJECT_ID}}", projectId)
 		.replaceAll("{{VERSION}}", version);
 

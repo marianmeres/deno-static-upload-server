@@ -30,6 +30,14 @@ export interface ProjectConfig {
 	getAccessControl?: GetAccessControl;
 	/** CDN cache strategy. "immutable" for content-hashed filenames. @default "mutable" */
 	cacheStrategy?: CacheStrategy;
+	/** Maximum per-file size in bytes. Rejects larger uploads with 413. No limit if undefined. */
+	maxFileSize?: number;
+	/** Allowed file extensions (lowercase, no dot). Rejects others with 400. No restriction if undefined. */
+	allowedExtensions?: string[];
+	/** Allowed MIME types (exact match, or `type/*` wildcard). No restriction if undefined. */
+	allowedMimeTypes?: string[];
+	/** Force `Content-Disposition: attachment` for served files to prevent inline XSS. @default false */
+	forceDownload?: boolean;
 }
 
 const configCache = new Map<string, ProjectConfig>();
@@ -41,6 +49,10 @@ export function isValidProjectId(id: string): boolean {
 	return PROJECT_ID_RE.test(id);
 }
 
+function cacheKey(configDir: string, projectId: string): string {
+	return `${configDir}\0${projectId}`;
+}
+
 /**
  * Load and cache a project config from CONFIG_DIR/{projectId}.json.
  * Returns null if the config file does not exist.
@@ -50,7 +62,8 @@ export async function loadProjectConfig(
 	configDir: string,
 	projectId: string,
 ): Promise<ProjectConfig | null> {
-	const cached = configCache.get(projectId);
+	const key = cacheKey(configDir, projectId);
+	const cached = configCache.get(key);
 	if (cached) return cached;
 
 	const configPath = join(configDir, `${projectId}.json`);
@@ -67,7 +80,9 @@ export async function loadProjectConfig(
 	try {
 		parsed = JSON.parse(raw);
 	} catch {
-		throw new Error(`Invalid JSON in config file: ${configPath}`);
+		throw new Error(
+			`Invalid JSON in project config (projectId="${projectId}")`,
+		);
 	}
 
 	if (
@@ -75,7 +90,9 @@ export async function loadProjectConfig(
 		parsed === null ||
 		Array.isArray(parsed)
 	) {
-		throw new Error(`Config must be a JSON object: ${configPath}`);
+		throw new Error(
+			`Project config must be a JSON object (projectId="${projectId}")`,
+		);
 	}
 
 	const config = parsed as Record<string, unknown>;
@@ -83,14 +100,14 @@ export async function loadProjectConfig(
 	// uploadTokens is required
 	if (!Array.isArray(config.uploadTokens)) {
 		throw new Error(
-			`Missing or invalid "uploadTokens" (must be an array) in: ${configPath}`,
+			`Missing or invalid "uploadTokens" (must be an array, projectId="${projectId}")`,
 		);
 	}
 
 	for (const t of config.uploadTokens) {
 		if (typeof t !== "string") {
 			throw new Error(
-				`All uploadTokens must be strings in: ${configPath}`,
+				`All uploadTokens must be strings (projectId="${projectId}")`,
 			);
 		}
 	}
@@ -99,16 +116,59 @@ export async function loadProjectConfig(
 	if (config.downloadTokens !== undefined) {
 		if (!Array.isArray(config.downloadTokens)) {
 			throw new Error(
-				`Invalid "downloadTokens" (must be an array) in: ${configPath}`,
+				`Invalid "downloadTokens" (must be an array, projectId="${projectId}")`,
 			);
 		}
 		for (const t of config.downloadTokens) {
 			if (typeof t !== "string") {
 				throw new Error(
-					`All downloadTokens must be strings in: ${configPath}`,
+					`All downloadTokens must be strings (projectId="${projectId}")`,
 				);
 			}
 		}
+	}
+
+	// Validate allowedExtensions if present
+	if (config.allowedExtensions !== undefined) {
+		if (!Array.isArray(config.allowedExtensions)) {
+			throw new Error(
+				`Invalid "allowedExtensions" (must be an array, projectId="${projectId}")`,
+			);
+		}
+		for (const t of config.allowedExtensions) {
+			if (typeof t !== "string") {
+				throw new Error(
+					`All allowedExtensions must be strings (projectId="${projectId}")`,
+				);
+			}
+		}
+	}
+
+	// Validate allowedMimeTypes if present
+	if (config.allowedMimeTypes !== undefined) {
+		if (!Array.isArray(config.allowedMimeTypes)) {
+			throw new Error(
+				`Invalid "allowedMimeTypes" (must be an array, projectId="${projectId}")`,
+			);
+		}
+		for (const t of config.allowedMimeTypes) {
+			if (typeof t !== "string") {
+				throw new Error(
+					`All allowedMimeTypes must be strings (projectId="${projectId}")`,
+				);
+			}
+		}
+	}
+
+	if (
+		config.maxFileSize !== undefined &&
+		(typeof config.maxFileSize !== "number" ||
+			config.maxFileSize < 0 ||
+			!Number.isFinite(config.maxFileSize))
+	) {
+		throw new Error(
+			`Invalid "maxFileSize" (must be a non-negative number, projectId="${projectId}")`,
+		);
 	}
 
 	const result: ProjectConfig = {
@@ -116,14 +176,34 @@ export async function loadProjectConfig(
 		downloadTokens: Array.isArray(config.downloadTokens)
 			? (config.downloadTokens as string[])
 			: undefined,
-		enableUploadForm: config.enableUploadForm !== false,
-		enableDelete: config.enableDelete !== false,
+		// Only set when explicitly provided in the JSON. Leaving it undefined
+		// lets the server-level default apply without being silently overridden.
+		enableUploadForm: typeof config.enableUploadForm === "boolean"
+			? config.enableUploadForm
+			: undefined,
+		enableDelete: typeof config.enableDelete === "boolean"
+			? config.enableDelete
+			: undefined,
 		plugin: typeof config.plugin === "string" ? config.plugin : undefined,
 		getAccessControl: config.getAccessControl === "token" ||
 				config.getAccessControl === "jwt"
 			? config.getAccessControl
 			: "public",
 		cacheStrategy: config.cacheStrategy === "immutable" ? "immutable" : "mutable",
+		maxFileSize: typeof config.maxFileSize === "number"
+			? config.maxFileSize
+			: undefined,
+		allowedExtensions: Array.isArray(config.allowedExtensions)
+			? (config.allowedExtensions as string[]).map((e) =>
+				e.toLowerCase().replace(/^\./, "")
+			)
+			: undefined,
+		allowedMimeTypes: Array.isArray(config.allowedMimeTypes)
+			? (config.allowedMimeTypes as string[]).map((m) => m.toLowerCase())
+			: undefined,
+		forceDownload: typeof config.forceDownload === "boolean"
+			? config.forceDownload
+			: undefined,
 	};
 
 	// JWT config
@@ -138,11 +218,22 @@ export async function loadProjectConfig(
 		};
 	}
 
-	configCache.set(projectId, result);
+	configCache.set(key, result);
 	return result;
 }
 
-/** Clear the config cache (useful for testing). */
-export function clearConfigCache(): void {
-	configCache.clear();
+/**
+ * Clear the config cache.
+ * When `configDir` is given, clears only entries for that directory.
+ * Otherwise clears the whole cache.
+ */
+export function clearConfigCache(configDir?: string): void {
+	if (configDir === undefined) {
+		configCache.clear();
+		return;
+	}
+	const prefix = `${configDir}\0`;
+	for (const key of configCache.keys()) {
+		if (key.startsWith(prefix)) configCache.delete(key);
+	}
 }

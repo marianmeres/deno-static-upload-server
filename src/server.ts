@@ -8,6 +8,7 @@
  * @module
  */
 
+import { resolve } from "@std/path";
 import { clearConfigCache, isValidProjectId, loadProjectConfig } from "./config.ts";
 import type { ProjectConfig } from "./config.ts";
 import { handleForm } from "./handlers/form.ts";
@@ -18,10 +19,21 @@ import { loadPlugin } from "./plugin.ts";
 import type { PluginContext } from "./plugin.ts";
 import { createCdnAdapter, noStoreHeaders } from "./cdn.ts";
 import type { CdnAdapter, CdnOptions } from "./cdn.ts";
+import { defaultLogger, silentLogger } from "./logger.ts";
+import type { Logger } from "./logger.ts";
 
-const { version: VERSION } = await fetch(
-	new URL("../deno.json", import.meta.url),
-).then((r) => r.json());
+let versionPromise: Promise<string> | null = null;
+
+/** Read package version lazily so importing the module has no side effects. */
+function getVersion(): Promise<string> {
+	if (!versionPromise) {
+		versionPromise = fetch(new URL("../deno.json", import.meta.url))
+			.then((r) => r.json())
+			.then((j) => j.version as string)
+			.catch(() => "unknown");
+	}
+	return versionPromise;
+}
 
 /** Configuration options for the static upload server. */
 export interface StaticServerOptions {
@@ -39,23 +51,43 @@ export interface StaticServerOptions {
 	globalToken?: string;
 	/** CDN adapter options. Omit to disable CDN integration. */
 	cdn?: Partial<CdnOptions>;
+	/**
+	 * Root-level files to serve directly from `staticDir` (bypassing project config).
+	 * Typical values: `["favicon.ico", "robots.txt"]`. Exact filenames, no globs.
+	 * @default []
+	 */
+	rootFiles?: string[];
+	/**
+	 * Logger. Pass `true` for default JSON-line logging, `false`/omit for silent,
+	 * or a custom {@linkcode Logger} implementation.
+	 * @default false
+	 */
+	logger?: boolean | Logger;
+	/**
+	 * Sweep stale `.tmp_*` files in staticDir on startup. Files older than
+	 * this many milliseconds are removed. Set `0` to disable. @default 3_600_000 (1h)
+	 */
+	tmpSweepMaxAgeMs?: number;
 }
 
-const DEFAULT_OPTIONS:
-	& Required<
-		Omit<StaticServerOptions, "jwtSecret" | "globalToken" | "cdn">
+const DEFAULT_OPTIONS: Required<
+	Pick<
+		StaticServerOptions,
+		| "port"
+		| "staticDir"
+		| "configDir"
+		| "enableUploadForm"
+		| "rootFiles"
+		| "tmpSweepMaxAgeMs"
 	>
-	& {
-		jwtSecret?: string;
-		globalToken?: string;
-	} = {
-		port: 8000,
-		staticDir: "./static",
-		configDir: "./config",
-		enableUploadForm: true,
-		jwtSecret: undefined,
-		globalToken: undefined,
-	};
+> = {
+	port: 8000,
+	staticDir: "./static",
+	configDir: "./config",
+	enableUploadForm: true,
+	rootFiles: [],
+	tmpSweepMaxAgeMs: 60 * 60 * 1000,
+};
 
 /** Static server instance returned by {@linkcode createServer}. */
 export interface StaticServer {
@@ -63,23 +95,74 @@ export interface StaticServer {
 	handler: (req: Request) => Promise<Response>;
 	/** Start listening on the configured port. */
 	start: () => ReturnType<typeof Deno.serve>;
+	/** Resolved package version. */
+	version: string;
 }
 
 // Re-export for convenience
-export type { CdnAdapter, CdnOptions, PluginContext, ProjectConfig };
+export type { CdnAdapter, CdnOptions, Logger, PluginContext, ProjectConfig };
 export { clearConfigCache };
+
+function resolveLogger(opt: StaticServerOptions["logger"]): Logger {
+	if (opt === true) return defaultLogger();
+	if (opt && typeof opt === "object") return opt;
+	return silentLogger;
+}
+
+/** Sweep orphaned `.tmp_*` files older than maxAgeMs. Never throws. */
+async function sweepTmpFiles(
+	rootDir: string,
+	maxAgeMs: number,
+	logger: Logger,
+): Promise<void> {
+	if (maxAgeMs <= 0) return;
+	const cutoff = Date.now() - maxAgeMs;
+	async function walk(dir: string) {
+		try {
+			for await (const entry of Deno.readDir(dir)) {
+				const full = `${dir}/${entry.name}`;
+				if (entry.isDirectory) {
+					await walk(full);
+				} else if (entry.isFile && /\.tmp_[0-9a-f-]+$/.test(entry.name)) {
+					try {
+						const stat = await Deno.stat(full);
+						if (stat.mtime && stat.mtime.getTime() < cutoff) {
+							await Deno.remove(full);
+							logger.info("tmp.swept", { path: full });
+						}
+					} catch {
+						// ignore
+					}
+				}
+			}
+		} catch {
+			// dir missing / unreadable — ignore
+		}
+	}
+	await walk(rootDir);
+}
 
 /**
  * Creates a static file server with per-project configuration and plugin support.
  *
  * @param opts Server configuration options.
- * @returns A server object with a `handler` function and a `start` method.
+ * @returns A server object with a `handler` function, `start` method, and resolved version.
  */
 export async function createServer(
 	opts: StaticServerOptions = {},
 ): Promise<StaticServer> {
 	const options = { ...DEFAULT_OPTIONS, ...opts };
+	const logger = resolveLogger(opts.logger);
 	const cdnAdapter = await createCdnAdapter(options.cdn);
+	const VERSION = await getVersion();
+	const absStaticDir = resolve(options.staticDir);
+
+	// Startup tmp sweep (non-blocking for request handling).
+	queueMicrotask(() => {
+		sweepTmpFiles(absStaticDir, options.tmpSweepMaxAgeMs, logger);
+	});
+
+	const rootFileSet = new Set(options.rootFiles);
 
 	async function handler(req: Request): Promise<Response> {
 		const url = new URL(req.url);
@@ -108,20 +191,18 @@ export async function createServer(
 		const filePath = segments.slice(1).join("/");
 
 		if (!projectId || !isValidProjectId(projectId)) {
-			// Root-level files (favicon.ico, robots.txt, etc.)
+			// Whitelisted root-level files (favicon.ico, robots.txt, etc.)
 			if (
 				(req.method === "GET" || req.method === "HEAD") &&
 				segments.length === 1 &&
-				projectId.includes(".")
+				rootFileSet.has(projectId)
 			) {
 				return handleServe(
 					req,
 					"",
 					{ uploadTokens: [] },
 					options.staticDir,
-					undefined,
-					undefined,
-					cdnAdapter,
+					{ cdn: cdnAdapter, logger },
 				);
 			}
 			return new Response("Not found", { status: 404 });
@@ -139,21 +220,16 @@ export async function createServer(
 			}
 			config = loaded;
 		} catch (e) {
-			console.error(e);
+			logger.error("config.load_failed", {
+				projectId,
+				error: e instanceof Error ? e.message : String(e),
+			});
 			return new Response("Server configuration error", { status: 500 });
 		}
 
-		// Apply global enableUploadForm default
-		if (
-			config.enableUploadForm === undefined &&
-			!options.enableUploadForm
-		) {
-			config = { ...config, enableUploadForm: false };
-		}
-
 		// Default handler for this request
-		async function defaultHandler(r: Request): Promise<Response> {
-			return await routeToHandler(
+		const defaultHandler = (r: Request) =>
+			routeToHandler(
 				r,
 				projectId,
 				filePath,
@@ -162,8 +238,10 @@ export async function createServer(
 				options.jwtSecret,
 				options.globalToken,
 				cdnAdapter,
+				options.enableUploadForm,
+				VERSION,
+				logger,
 			);
-		}
 
 		// Plugin support: if configured, let plugin handle first
 		if (config.plugin) {
@@ -182,7 +260,10 @@ export async function createServer(
 				const pluginResponse = await pluginHandler(req, ctx);
 				if (pluginResponse) return pluginResponse;
 			} catch (e) {
-				console.error(`Plugin error for project "${projectId}":`, e);
+				logger.error("plugin.error", {
+					projectId,
+					error: e instanceof Error ? e.message : String(e),
+				});
 				return new Response("Plugin error", { status: 500 });
 			}
 		}
@@ -192,12 +273,16 @@ export async function createServer(
 
 	return {
 		handler,
+		version: VERSION,
 		start() {
 			console.log(`Listening on :${options.port}`);
 			console.log(`  Config : ${options.configDir}`);
 			console.log(`  Static : ${options.staticDir}`);
 			if (cdnAdapter) {
 				console.log(`  CDN    : ${options.cdn?.provider}`);
+			}
+			if (rootFileSet.size > 0) {
+				console.log(`  Root files: ${[...rootFileSet].join(", ")}`);
 			}
 			console.log(`  Routes :`);
 			console.log(`    GET    /            version`);
@@ -218,16 +303,25 @@ async function routeToHandler(
 	filePath: string,
 	config: ProjectConfig,
 	staticDir: string,
-	jwtSecret?: string,
-	globalToken?: string,
-	cdn?: CdnAdapter,
+	jwtSecret: string | undefined,
+	globalToken: string | undefined,
+	cdn: CdnAdapter | undefined,
+	defaultEnableForm: boolean,
+	version: string,
+	logger: Logger,
 ): Promise<Response> {
 	const method = req.method;
 
 	// No file path — project-level routes
 	if (!filePath) {
 		if (method === "GET" || method === "HEAD") {
-			let res = handleForm(req, projectId, config, VERSION);
+			let res = await handleForm(
+				req,
+				projectId,
+				config,
+				version,
+				defaultEnableForm,
+			);
 			if (res) {
 				if (cdn) res = noStoreHeaders(res);
 				if (method === "HEAD") {
@@ -242,33 +336,30 @@ async function routeToHandler(
 			return new Response("Not found", { status: 404 });
 		}
 		if (method === "POST") {
-			return handleUpload(req, projectId, config, staticDir, globalToken, cdn);
+			return handleUpload(req, projectId, config, staticDir, {
+				globalToken,
+				cdn,
+				logger,
+			});
 		}
 		return new Response("Not found", { status: 404 });
 	}
 
 	// File path present — file-level routes
 	if (method === "GET" || method === "HEAD") {
-		return await handleServe(
-			req,
-			projectId,
-			config,
-			staticDir,
+		return await handleServe(req, projectId, config, staticDir, {
 			jwtSecret,
 			globalToken,
 			cdn,
-		);
+			logger,
+		});
 	}
 	if (method === "DELETE") {
-		return handleDelete(
-			req,
-			projectId,
-			filePath,
-			config,
-			staticDir,
+		return handleDelete(req, projectId, filePath, config, staticDir, {
 			globalToken,
 			cdn,
-		);
+			logger,
+		});
 	}
 
 	return new Response("Not found", { status: 404 });

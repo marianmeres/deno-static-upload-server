@@ -41,9 +41,9 @@ export async function verifyJwt(
 		const header = JSON.parse(
 			new TextDecoder().decode(base64UrlDecode(headerB64)),
 		);
-		if (header.alg !== "HS256" || header.typ !== "JWT") {
-			return null;
-		}
+		if (header.alg !== "HS256") return null;
+		// `typ` is OPTIONAL per RFC 7519 §5.1. Only reject when present and wrong.
+		if (header.typ !== undefined && header.typ !== "JWT") return null;
 	} catch {
 		return null;
 	}

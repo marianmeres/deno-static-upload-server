@@ -3,21 +3,24 @@
 [![JSR](https://jsr.io/badges/@marianmeres/deno-static-upload-server)](https://jsr.io/@marianmeres/deno-static-upload-server)
 [![License](https://img.shields.io/github/license/marianmeres/deno-static-upload-server)](LICENSE)
 
-A lightweight, self-hosted static file server with upload endpoint and per-project configuration. Built for reliable home for static assets without the complexity of a full cloud storage setup.
+A lightweight, self-hosted static file server with upload endpoint and per-project configuration. Built for a reliable home for static assets without the complexity of a full cloud storage setup.
 
 ## Features
 
 - **Per-project configuration** — each project gets its own JSON config with independent auth tokens
-- **Upload endpoint** — accepts `multipart/form-data` file uploads
+- **Upload endpoint** — accepts `multipart/form-data` file uploads with streaming writes and size limits
 - **Static file serving** — via `@std/http/file-server` (range requests, content types, caching headers)
 - **Delete endpoint** — remove uploaded files (requires auth)
-- **Plugin architecture** — custom handlers per project for full customization
-- **JWT support** — HS256 token verification for time-scoped access
+- **Plugin architecture** — custom handlers per project, sandboxed to configDir
+- **JWT support** — HS256 token verification (Web Crypto, zero-dep)
 - **GET access control** — optional token/JWT requirement for static file serving
 - **Download tokens** — per-project bearer tokens for download protection
 - **Global token** — superuser token for cross-project upload, delete, and download access
 - **Browser upload form** — built-in HTML form at `GET /:projectId`
-- **CDN integration** — optional, provider-agnostic CDN support (cache headers, purge on upload/delete). Cloudflare adapter included
+- **CDN integration** — optional, provider-agnostic (Cloudflare adapter included). Cache headers + fire-and-forget purge on upload/delete
+- **Upload policies** — per-project `maxFileSize`, `allowedExtensions`, `allowedMimeTypes`, `forceDownload`
+- **Hardened serving** — `X-Content-Type-Options: nosniff` always on; CORS off for auth-protected content
+- **Structured logging** — pluggable `Logger` interface with a JSON-line default
 - **Zero dependencies** — just Deno standard library
 
 ## Quick start
@@ -47,6 +50,7 @@ const server = await createServer({
 	port: 8000,
 	staticDir: "./static",
 	configDir: "./config",
+	logger: true, // JSON-line logs to stderr
 });
 
 server.start();
@@ -56,19 +60,18 @@ server.start();
 
 ### Server options (env vars)
 
-| Option                     | Env var                      | Default    | Description                              |
-| -------------------------- | ---------------------------- | ---------- | ---------------------------------------- |
-| `port`                     | `PORT`                       | `8000`     | Port to listen on                        |
-| `staticDir`                | `STATIC_DIR`                 | `./static` | Root directory for stored files          |
-| `configDir`                | `CONFIG_DIR`                 | `./config` | Directory for per-project JSON configs   |
-| `enableUploadForm`         | `ENABLE_UPLOAD_FORM`         | `true`     | Global default for upload form           |
-| `jwtSecret`                | `JWT_SECRET`                 | —          | Shared JWT secret (per-project override) |
-| `globalToken`              | `GLOBAL_TOKEN`               | —          | Superuser token for all projects         |
-| `cdn.provider`             | `CDN_PROVIDER`               | —          | CDN provider name (e.g. `cloudflare`)    |
-| `cdn.purgeUrlPrefix`       | `CDN_CACHE_PURGE_URL_PREFIX` | —          | Public URL prefix for cache purge        |
-| `cdn.cacheMaxAge`          | `CDN_CACHE_MAX_AGE`          | `60`       | Browser cache max-age (seconds)          |
-| `cdn.cacheSMaxAge`         | `CDN_CACHE_S_MAXAGE`         | `604800`   | CDN cache s-maxage (seconds)             |
-| `cdn.staleWhileRevalidate` | `CDN_STALE_WHILE_REVALIDATE` | `86400`    | Stale-while-revalidate window (seconds)  |
+| Option             | Env var                | Default    | Description                                                             |
+| ------------------ | ---------------------- | ---------- | ----------------------------------------------------------------------- |
+| `port`             | `PORT`                 | `8000`     | Port to listen on                                                       |
+| `staticDir`        | `STATIC_DIR`           | `./static` | Root directory for stored files                                         |
+| `configDir`        | `CONFIG_DIR`           | `./config` | Directory for per-project JSON configs                                  |
+| `enableUploadForm` | `ENABLE_UPLOAD_FORM`   | `true`     | Server default for upload form                                          |
+| `jwtSecret`        | `JWT_SECRET`           | —          | Shared JWT secret                                                       |
+| `globalToken`      | `GLOBAL_TOKEN`         | —          | Superuser token for all projects                                        |
+| `rootFiles`        | `ROOT_FILES`           | `[]`       | Comma-separated root filenames to serve (e.g. `favicon.ico,robots.txt`) |
+| `logger`           | `LOG`                  | off        | Set `LOG=true` for JSON-line logs                                       |
+| `tmpSweepMaxAgeMs` | `TMP_SWEEP_MAX_AGE_MS` | `3600000`  | Remove stale `.tmp_*` files older than this on startup                  |
+| CDN options        | `CDN_*`, `CF_*`        | —          | See [API.md](API.md)                                                    |
 
 ### Per-project config (`config/{projectId}.json`)
 
@@ -81,18 +84,26 @@ server.start();
 	"plugin": "./plugins/my-project.ts",
 	"jwt": { "secret": "per-project-secret" },
 	"getAccessControl": "public",
-	"cacheStrategy": "mutable"
+	"cacheStrategy": "mutable",
+	"maxFileSize": 10485760,
+	"allowedExtensions": ["png", "jpg", "webp"],
+	"allowedMimeTypes": ["image/*"],
+	"forceDownload": false
 }
 ```
 
 - `uploadTokens` (required) — empty array disables auth for uploads
-- `downloadTokens` (optional) — if non-empty, GET requests require a matching bearer token
+- `downloadTokens` — if non-empty, GET requires a matching bearer token
 - `getAccessControl` — `"public"` (default), `"token"`, or `"jwt"` for GET requests
-- `cacheStrategy` — `"mutable"` (default) or `"immutable"`. Use `"immutable"` for projects that use content-hashed filenames — files get `Cache-Control: public, max-age=31536000, immutable`. CDN purge still happens on delete.
+- `cacheStrategy` — `"mutable"` (default) or `"immutable"` (for content-hashed filenames)
+- `maxFileSize` — bytes; oversized uploads return `413` (streaming enforcement)
+- `allowedExtensions` — lowercase, no dot. Non-matching extensions return `400`
+- `allowedMimeTypes` — exact MIME type or `type/*` wildcard
+- `forceDownload` — adds `Content-Disposition: attachment` to served files (mitigates inline XSS from user-uploaded HTML/SVG)
 
 ### Global token
 
-Set `GLOBAL_TOKEN` in your `.env` to define a superuser token that is accepted for uploads, deletes, and downloads across all projects. It does not change per-project auth requirements — open projects (with empty `uploadTokens`) remain open.
+Set `GLOBAL_TOKEN` to define a superuser token accepted for uploads, deletes, and downloads across all projects. It does not change per-project auth requirements — open projects (with empty `uploadTokens`) remain open.
 
 ### Using a `.env` file
 
@@ -109,6 +120,7 @@ See [API.md](API.md) for complete API documentation.
 | Method | Path            | Description              |
 | ------ | --------------- | ------------------------ |
 | GET    | `/`             | Version signature        |
+| GET    | `/<rootFile>`   | Whitelisted root file    |
 | GET    | `/:projectId`   | Upload form              |
 | POST   | `/:projectId`   | Upload files             |
 | GET    | `/:projectId/*` | Serve static file        |
@@ -129,6 +141,17 @@ curl -X POST http://localhost:8000/my-app \
 { "uploaded": ["/my-app/images/thumbs/photo.webp"] }
 ```
 
+If one or more files are rejected by policy (size/extension/MIME), the response also includes a `rejected` array:
+
+```json
+{
+	"uploaded": ["/my-app/ok.png"],
+	"rejected": [{ "name": "huge.mp4", "reason": "File exceeds maxFileSize (10485760)" }]
+}
+```
+
+All-rejected responses return `413` when size was the only reason, otherwise `400`.
+
 ### Delete a file
 
 ```
@@ -147,37 +170,34 @@ Authorization: Bearer <token>
 Optional, provider-agnostic CDN support. When configured, the server:
 
 - Adds `Cache-Control` headers to served static files
-- Purges CDN cache when files are uploaded (overwritten) or deleted
+- Purges CDN cache when files are uploaded or deleted (fire-and-forget — does not block the response)
 - Sets `Cache-Control: no-store` on non-static responses (version endpoint, upload form)
-
-Cache headers depend on the project's `cacheStrategy`:
-
-- **`"mutable"`** (default): `public, max-age=60, s-maxage=604800, stale-while-revalidate=86400` — browser caches 1 min (can't purge browsers), CDN caches 7 days (purged on change)
-- **`"immutable"`**: `public, max-age=31536000, immutable` — cache forever, ideal for content-hashed filenames
 
 ### Cloudflare setup
 
 ```env
 CDN_PROVIDER=cloudflare
 CDN_CACHE_PURGE_URL_PREFIX=https://cdn.example.com
-# CDN_CACHE_MAX_AGE=60
-# CDN_CACHE_S_MAXAGE=604800
-# CDN_STALE_WHILE_REVALIDATE=86400
 CF_ZONE_ID=your-zone-id
 CF_API_TOKEN=your-api-token
 ```
 
-The API token needs the **Cache Purge** permission for your zone.
+The API token needs the **Cache Purge** permission for your zone. See [API.md](API.md) for all CDN options.
 
-When `CDN_PROVIDER` is not set, CDN integration is completely disabled with no behavior changes.
+## Security hardening
 
-### Adding a custom CDN provider
-
-Implement the `CdnAdapter` interface from `src/cdn.ts` and add a case in `createCdnAdapter()`. See `src/cdn/cloudflare.ts` for reference.
+- **`X-Content-Type-Options: nosniff`** is set on every served file. Mitigates MIME-sniffing attacks.
+- **`forceDownload: true`** (per-project) forces `Content-Disposition: attachment` on served files — recommended when accepting untrusted uploads that include HTML/SVG.
+- **CORS** is disabled automatically when GETs are protected (`downloadTokens` set, or `getAccessControl` is `"token"` / `"jwt"`). Public content still gets `Access-Control-Allow-Origin: *`.
+- **Constant-time token comparison** for upload/download tokens and the global token.
+- **Plugin sandbox**: plugin paths must resolve inside `configDir`.
+- **`maxFileSize`** enforcement is streaming — oversized uploads are aborted mid-stream (the temp file is removed).
+- **Recommendation for public upload endpoints**: serve uploaded files from a dedicated cookieless domain, and combine with `forceDownload` and `allowedExtensions`/`allowedMimeTypes` to constrain accepted content.
+- **Rate limiting** is out of scope — put a reverse-proxy limiter in front of the server if exposed to the public internet.
 
 ## Plugin system
 
-Create a TypeScript module that default-exports a handler function:
+Create a TypeScript module (inside `configDir`) that default-exports a handler function:
 
 ```ts
 // config/plugins/my-project.ts
@@ -188,7 +208,9 @@ export default async function (req, ctx) {
 }
 ```
 
-Reference it in your project config: `"plugin": "./plugins/my-project.ts"`
+Reference it in your project config: `"plugin": "./plugins/my-project.ts"`.
+
+Plugin paths must resolve inside `configDir` (enforced at load time).
 
 ## Token rotation (zero downtime)
 
@@ -198,7 +220,7 @@ Put multiple tokens in the project config:
 { "uploadTokens": ["old-token", "new-token"] }
 ```
 
-Update your app to use the new token, then remove the old one and restart.
+Update your app to use the new token, then remove the old one and restart (or call `clearConfigCache(configDir)` if embedding the handler).
 
 ## Docker
 

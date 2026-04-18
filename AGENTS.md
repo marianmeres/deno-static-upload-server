@@ -7,25 +7,29 @@
 - **Dev**: `deno task dev`
 - **Example**: `deno task example` (loads `.env.example`)
 - **Format**: `deno fmt` (tabs, 90-char lines, indent 4)
+- **Typecheck**: `deno check src/**/*.ts`
 
 ## Project Structure
 
 ```
-src/server.ts          — Core: createServer(), handler, StaticServerOptions
-src/cli.ts             — CLI entry point (reads env vars, calls createServer)
-src/config.ts          — ProjectConfig interface, loadProjectConfig(), cache
-src/auth.ts            — isAuthorized(req, tokens, globalToken?), extractBearerToken()
-src/jwt.ts             — HS256 JWT verification via Web Crypto API
-src/plugin.ts          — PluginHandler type, PluginContext, loadPlugin()
-src/cdn.ts             — CdnAdapter interface, CdnOptions, createCdnAdapter() factory
-src/cdn/cloudflare.ts  — CloudflareCdnAdapter (cache headers + CF API purge)
-src/handlers/form.ts   — GET /:projectId (upload form)
-src/handlers/upload.ts — POST /:projectId (file upload, CDN purge on overwrite)
-src/handlers/serve.ts  — GET/HEAD /:projectId/* (static file serving, CDN cache headers)
-src/handlers/delete.ts — DELETE /:projectId/* (file deletion, CDN purge)
-src/upload.html        — HTML upload form template
-tests/_helpers.ts      — Shared test utilities (setup, cleanup, makeUploadRequest, etc.)
-tests/*_test.ts        — Tests split by concern (config, auth, upload, serve, delete, cdn)
+src/server.ts          — createServer(), handler, StaticServerOptions
+src/cli.ts             — CLI entry (reads env vars, calls createServer)
+src/config.ts          — ProjectConfig, loadProjectConfig(), cache (keyed by configDir+projectId)
+src/auth.ts            — isAuthorized(), extractBearerToken(), timingSafeEqualStr()
+src/jwt.ts             — HS256 JWT verification (Web Crypto); `typ` is optional per RFC 7519
+src/paths.ts           — sanitizePath(), resolveUnderStaticDir() (uses @std/path `relative()`)
+src/content-type.ts    — extOf(), mimeMatches(), checkUploadPolicy() (size/ext/mime gates)
+src/logger.ts          — Logger interface, defaultLogger(), silentLogger
+src/plugin.ts          — PluginHandler, PluginContext, loadPlugin() (sandboxed to configDir)
+src/cdn.ts             — CdnAdapter, CdnOptions, createCdnAdapter(), noStoreHeaders()
+src/cdn/cloudflare.ts  — CloudflareCdnAdapter
+src/handlers/form.ts   — GET /:projectId (upload form, lazy-loads HTML)
+src/handlers/upload.ts — POST /:projectId (streaming write with byte cap, partial-failure reporting)
+src/handlers/serve.ts  — GET/HEAD /:projectId/* (nosniff, forceDownload, CORS off for protected)
+src/handlers/delete.ts — DELETE /:projectId/*
+src/upload.html        — Upload form template
+tests/_helpers.ts      — Shared test utilities
+tests/*.test.ts        — auth, auth_timing, cache, cdn, config, delete, hardening, jwt, plugin, policy, serve, upload
 example/main.ts        — Example usage
 .env.example           — Example env config
 ```
@@ -37,40 +41,76 @@ example/main.ts        — Example usage
 | `"."`        | `src/cli.ts`    | CLI entry (default, runnable) |
 | `"./server"` | `src/server.ts` | Programmatic API              |
 
+## Programmatic API
+
+- `createServer(opts)` → `Promise<{ handler, start, version }>`. **async** (CDN adapter init, version read).
+- `clearConfigCache(configDir?)` — clear all, or only entries for a given configDir.
+- Types re-exported from `server`: `CdnAdapter`, `CdnOptions`, `Logger`, `PluginContext`, `ProjectConfig`, `StaticServerOptions`.
+
+## Configuration
+
+### `StaticServerOptions`
+
+| Field              | Type                  | Default      | Notes                                                                                  |
+| ------------------ | --------------------- | ------------ | -------------------------------------------------------------------------------------- |
+| `port`             | `number`              | `8000`       |                                                                                        |
+| `staticDir`        | `string`              | `"./static"` |                                                                                        |
+| `configDir`        | `string`              | `"./config"` |                                                                                        |
+| `enableUploadForm` | `boolean`             | `true`       | Server-level default; per-project `enableUploadForm` overrides                         |
+| `jwtSecret`        | `string`              | —            | Fallback for projects without `jwt.secret`                                             |
+| `globalToken`      | `string`              | —            | Superuser upload/delete/download                                                       |
+| `cdn`              | `Partial<CdnOptions>` | —            | Omit to disable                                                                        |
+| `rootFiles`        | `string[]`            | `[]`         | Exact filenames to serve from staticDir root (e.g. `["favicon.ico"]`). No config load. |
+| `logger`           | `boolean \| Logger`   | `false`      | `true` = JSON-line to stderr; object = custom                                          |
+| `tmpSweepMaxAgeMs` | `number`              | `3_600_000`  | On startup, remove `.tmp_*` files older than this. `0` disables.                       |
+
+### `ProjectConfig` (JSON at `{configDir}/{projectId}.json`)
+
+| Field               | Type                           | Default     | Notes                                                              |
+| ------------------- | ------------------------------ | ----------- | ------------------------------------------------------------------ |
+| `uploadTokens`      | `string[]`                     | required    | `[]` disables upload auth                                          |
+| `downloadTokens`    | `string[]`                     | —           | Non-empty → GET requires bearer token                              |
+| `enableUploadForm`  | `boolean`                      | server-side | Per-project override of server default                             |
+| `enableDelete`      | `boolean`                      | `true`      | Also requires non-empty `uploadTokens`                             |
+| `plugin`            | `string`                       | —           | Path relative to configDir; **must resolve inside configDir**      |
+| `jwt.secret`        | `string`                       | —           | Per-project JWT secret                                             |
+| `getAccessControl`  | `"public" \| "token" \| "jwt"` | `"public"`  | GET access control                                                 |
+| `cacheStrategy`     | `"mutable" \| "immutable"`     | `"mutable"` | For content-hashed filenames                                       |
+| `maxFileSize`       | `number`                       | —           | Bytes; per-file cap. Oversize → `413` with `rejected` in response. |
+| `allowedExtensions` | `string[]`                     | —           | Lowercase, no dot. Non-match → `400` with `rejected`.              |
+| `allowedMimeTypes`  | `string[]`                     | —           | Exact or `type/*` wildcard. Non-match → `400` with `rejected`.     |
+| `forceDownload`     | `boolean`                      | `false`     | Adds `Content-Disposition: attachment` on served files             |
+
 ## Key Patterns
 
-- `createServer(opts)` is **async** — returns `Promise<{ handler, start }>`. Handler is `(Request) => Promise<Response>`, start calls `Deno.serve()`
-- Per-project JSON config in `CONFIG_DIR/{projectId}.json` — lazy-loaded, cached forever
-- `uploadTokens` is **required** in each project config (empty array = no auth)
-- `downloadTokens` is optional per project — if non-empty, GET requests require a matching bearer token
-- `GLOBAL_TOKEN` env var provides a superuser token accepted for upload/delete/download across all projects (does not change per-project auth requirements)
-- Plugin system: optional `"plugin"` field in project config points to a .ts module
-- CDN adapter system: optional, provider-agnostic interface. Set `CDN_PROVIDER` env var to enable. Cloudflare is the first implementation. See `src/cdn.ts` for the `CdnAdapter` interface.
-- Tests call `handler()` directly (no HTTP server needed). Shared helpers in `tests/_helpers.ts`
-- `upload.html` uses `{{PROJECT_ID}}` and `{{VERSION}}` template placeholders
-- Path sanitization: strips `..` and `.`, replaces unsafe chars with `_`, verifies resolved path stays within `staticDir`
-- `serveDir` only accepts GET — HEAD is handled by converting to GET, calling serveDir, then stripping the body
+- **Streaming uploads with byte cap**: `src/handlers/upload.ts` uses `Deno.open` + manual chunk loop so size limits are enforced mid-stream without buffering the whole file.
+- **Partial success reporting**: upload response is `{ uploaded, rejected? }`. `rejected` is `[{ name, reason }]` if any files were skipped. All-rejected → `413` (size-only) or `400`.
+- **CDN purge is fire-and-forget** (`queueMicrotask`): response is not blocked on CDN round-trip. `CdnAdapter.purgeCache` contract: must never throw.
+- **Hardening headers** on all served files: `X-Content-Type-Options: nosniff` (always), `Content-Disposition: attachment` (if `forceDownload`).
+- **CORS**: enabled only for fully public GETs. Disabled when `downloadTokens` set OR `getAccessControl` is `"token"` / `"jwt"`.
+- **Timing-safe token comparison** (`timingSafeEqualStr`): walks full `expected.length`, XOR-accumulates diff, compares once at end.
+- **Path boundary**: `resolveUnderStaticDir()` uses `@std/path` `relative()` instead of string `startsWith`.
+- **Plugin sandbox**: `loadPlugin` rejects paths that resolve outside configDir; imports via `toFileUrl` for cross-platform safety.
+- **Lazy module loads**: `deno.json` (for version) and `src/upload.html` are loaded on first use, not at import time.
+- **Logger**: all handlers receive a `Logger`. `silentLogger` by default. Events: `upload.unauthorized`, `upload.done`, `upload.write_failed`, `delete.unauthorized`, `delete.done`, `serve.unauthorized`, `serve.jwt_not_configured`, `config.load_failed`, `plugin.error`, `cdn.purge_failed`, `tmp.swept`.
+- **Tmp sweep**: on startup, walks `staticDir`, removes `*.tmp_<uuid>` files older than `tmpSweepMaxAgeMs`. Non-blocking, never throws.
+- **Root files**: `GET /<name>` serves `staticDir/<name>` ONLY for names listed in `opts.rootFiles`. No implicit allow.
+- **Config cache**: keyed by `configDir\0projectId`. Multiple `createServer` instances with different configDirs are isolated.
 
-## CDN Adapter System
+## Env Vars
 
-Provider-agnostic CDN integration via `CdnAdapter` interface in `src/cdn.ts`:
-
-- `applyCacheHeaders(res, immutable?)` — adds `Cache-Control` to 2xx responses. Mutable: `public, max-age=60, s-maxage=604800, stale-while-revalidate=86400`. Immutable: `public, max-age=31536000, immutable`.
-- `purgeCache(paths[])` — purges file paths from CDN cache (fire-and-forget, never throws). Always called on upload/delete regardless of cache strategy.
-- Non-static responses (version endpoint, upload form) get `Cache-Control: no-store` when CDN is enabled.
-
-Per-project `"cacheStrategy"` in project config: `"mutable"` (default) or `"immutable"` (for content-hashed filenames).
-
-Factory `createCdnAdapter(opts)` dispatches on `opts.provider`. Adding a new provider: create `src/cdn/{provider}.ts` implementing `CdnAdapter`, add a case in the factory switch.
-
-Cloudflare adapter (`src/cdn/cloudflare.ts`): uses CF API `POST /zones/{zoneId}/purge_cache`.
+Server: `PORT`, `STATIC_DIR`, `CONFIG_DIR`, `ENABLE_UPLOAD_FORM`, `JWT_SECRET`, `GLOBAL_TOKEN`, `ROOT_FILES` (comma-separated), `LOG` (`true`/`1` for JSON-line stderr), `TMP_SWEEP_MAX_AGE_MS`.
+CDN: `CDN_PROVIDER`, `CDN_CACHE_PURGE_URL_PREFIX`, `CDN_CACHE_MAX_AGE`, `CDN_CACHE_S_MAXAGE`, `CDN_STALE_WHILE_REVALIDATE`.
+Cloudflare: `CF_ZONE_ID`, `CF_API_TOKEN`.
+Docker: `PUID`, `PGID`.
 
 ## Routes
 
 | Method | Path            | Handler                         |
 | ------ | --------------- | ------------------------------- |
 | GET    | `/`             | Version signature `{ version }` |
-| GET    | `/:projectId`   | Upload form                     |
+| GET    | `/<rootFile>`   | Whitelisted root file           |
+| GET    | `/:projectId`   | Upload form (if enabled)        |
 | POST   | `/:projectId`   | Upload file(s)                  |
 | GET    | `/:projectId/*` | Serve static file               |
 | HEAD   | `/:projectId/*` | File info (headers only)        |
@@ -78,17 +118,29 @@ Cloudflare adapter (`src/cdn/cloudflare.ts`): uses CF API `POST /zones/{zoneId}/
 
 ## Critical Conventions
 
-1. Use tabs for indentation (configured in `deno.json` fmt)
-2. No external dependencies — only `@std/*` and native `fetch`
-3. Server env vars: `PORT`, `STATIC_DIR`, `CONFIG_DIR`, `ENABLE_UPLOAD_FORM`, `JWT_SECRET`, `GLOBAL_TOKEN`
-   CDN env vars: `CDN_PROVIDER`, `CDN_CACHE_PURGE_URL_PREFIX`, `CDN_CACHE_MAX_AGE`, `CDN_CACHE_S_MAXAGE`, `CDN_STALE_WHILE_REVALIDATE`
-   Cloudflare env vars: `CF_ZONE_ID`, `CF_API_TOKEN`
-   Docker-specific env vars: `PUID`, `PGID` (host user UID/GID for volume ownership, default `1000`)
-4. Project IDs must match `/^[a-zA-Z0-9\-_]+$/`
-5. Project config `uploadTokens` is required (empty array = auth disabled)
+1. Tabs for indentation (`deno fmt` enforces)
+2. No external dependencies — only `@std/*`
+3. Project IDs match `/^[a-zA-Z0-9\-_]+$/`
+4. `uploadTokens` required (empty array = auth disabled)
+5. Plugin paths must resolve inside `configDir`
+
+## Breaking Changes (from 1.4.3)
+
+| Change                                                                   | Mitigation                                                                            |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| Root files: `/favicon.ico` etc. now require `rootFiles: ["favicon.ico"]` | Add filenames to `rootFiles` (or env `ROOT_FILES=favicon.ico,robots.txt`)             |
+| `enableUploadForm: false` server-level **actually disables** the form    | Previously silently ignored. Remove the option if the old no-op was relied on.        |
+| CORS disabled for auth-protected GETs (`downloadTokens`, `token`, `jwt`) | Serve protected files from same-origin, or write a plugin that sets CORS manually     |
+| CDN purge no longer awaited before upload/delete response                | Response returns faster. Clients must not assume cache was purged before 200.         |
+| Config cache keyed by `configDir\0projectId` (was projectId only)        | Same-project-id across different configDirs is now isolated (bug fix).                |
+| JWT `typ` now OPTIONAL (was required to be `"JWT"`)                      | Spec-compliant. Tokens without `typ` now verify; explicit wrong `typ` still rejected. |
+| Upload response may include `rejected: [{name, reason}]`                 | Additive; existing `uploaded` field unchanged                                         |
+| `handleForm` is now async (internal)                                     | Internal. If you import it directly, `await` the call.                                |
+| `X-Content-Type-Options: nosniff` added to served files                  | Security hardening. Should be non-breaking for browsers.                              |
 
 ## Before Making Changes
 
 - [ ] Read `src/server.ts` — main routing and handler orchestration
-- [ ] Run `deno task test` — all 48 tests must pass
-- [ ] Run `deno fmt` after changes
+- [ ] Run `deno task test` — all tests must pass
+- [ ] Run `deno fmt` and `deno check src/**/*.ts`
+- [ ] For security-adjacent changes, add a test in `tests/hardening.test.ts` or `tests/policy.test.ts`

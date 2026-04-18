@@ -30,6 +30,21 @@ if (jwtSecret) options.jwtSecret = jwtSecret;
 const globalToken = Deno.env.get("GLOBAL_TOKEN");
 if (globalToken) options.globalToken = globalToken;
 
+const rootFiles = Deno.env.get("ROOT_FILES");
+if (rootFiles) {
+	options.rootFiles = rootFiles.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+if (Deno.env.get("LOG") === "true" || Deno.env.get("LOG") === "1") {
+	options.logger = true;
+}
+
+const tmpSweep = Deno.env.get("TMP_SWEEP_MAX_AGE_MS");
+if (tmpSweep !== undefined && tmpSweep !== "") {
+	const n = Number(tmpSweep);
+	if (Number.isFinite(n) && n >= 0) options.tmpSweepMaxAgeMs = n;
+}
+
 // CDN integration (optional)
 const cdnProvider = Deno.env.get("CDN_PROVIDER");
 if (cdnProvider) {
