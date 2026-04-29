@@ -4,7 +4,6 @@
  * Reads configuration from environment variables and starts the server.
  * Run directly with `deno run` or as the default package export.
  *
- * @module
  */
 
 import { createServer } from "./server.ts";
@@ -32,7 +31,10 @@ if (globalToken) options.globalToken = globalToken;
 
 const rootFiles = Deno.env.get("ROOT_FILES");
 if (rootFiles) {
-	options.rootFiles = rootFiles.split(",").map((s) => s.trim()).filter(Boolean);
+	options.rootFiles = rootFiles
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean);
 }
 
 if (Deno.env.get("LOG") === "true" || Deno.env.get("LOG") === "1") {
@@ -62,7 +64,8 @@ if (cdnProvider) {
 	const staleWhileRevalidate = Number(
 		Deno.env.get("CDN_STALE_WHILE_REVALIDATE"),
 	);
-	if (staleWhileRevalidate > 0) cdn.staleWhileRevalidate = staleWhileRevalidate;
+	if (staleWhileRevalidate > 0)
+		cdn.staleWhileRevalidate = staleWhileRevalidate;
 
 	// Provider-specific env vars
 	const cfZoneId = Deno.env.get("CF_ZONE_ID");
