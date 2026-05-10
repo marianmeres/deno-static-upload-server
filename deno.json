@@ -18,7 +18,7 @@
     "docker:down": "docker compose down",
     "docker:upgrade": "docker compose up -d --force-recreate --pull always",
     "docker:restart": "docker compose down && docker compose up -d --force-recreate",
-    "docker:rebuild": "docker compose down && docker compose build && docker compose up -d --force-recreate",
+    "docker:rebuild": "docker compose build && docker compose down && docker compose up -d --force-recreate",
     "docker:logs": "docker compose logs -f",
     "deploy": "bash deploy.sh"
   },
