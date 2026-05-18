@@ -6,6 +6,16 @@ export type GetAccessControl = "public" | "token" | "jwt";
 /** CDN cache strategy for a project's files. */
 export type CacheStrategy = "mutable" | "immutable";
 
+/**
+ * Per-project cache strategy: a single value applied to every file, or a map
+ * of path prefix → strategy. In the map form, keys are matched against the
+ * request path inside the project static dir (e.g. `/img/abc.jpg`); a bare
+ * `*` or `/` is the fallback for unmatched paths. Longest matching prefix wins.
+ */
+export type CacheStrategyConfig =
+	| CacheStrategy
+	| Record<string, CacheStrategy>;
+
 /** JWT configuration for a project. */
 export interface JwtConfig {
 	/** Per-project JWT secret. Falls back to global JWT_SECRET if not set. */
@@ -28,8 +38,13 @@ export interface ProjectConfig {
 	downloadTokens?: string[];
 	/** Access control for GET file requests. @default "public" */
 	getAccessControl?: GetAccessControl;
-	/** CDN cache strategy. "immutable" for content-hashed filenames. @default "mutable" */
-	cacheStrategy?: CacheStrategy;
+	/**
+	 * CDN cache strategy. `"immutable"` for content-hashed filenames; otherwise
+	 * `"mutable"` (the default). May also be a map of path prefix → strategy
+	 * for per-subpath control within one project — see {@linkcode CacheStrategyConfig}.
+	 * @default "mutable"
+	 */
+	cacheStrategy?: CacheStrategyConfig;
 	/** Maximum per-file size in bytes. Rejects larger uploads with 413. No limit if undefined. */
 	maxFileSize?: number;
 	/** Allowed file extensions (lowercase, no dot). Rejects others with 400. No restriction if undefined. */
@@ -51,6 +66,57 @@ export function isValidProjectId(id: string): boolean {
 
 function cacheKey(configDir: string, projectId: string): string {
 	return `${configDir}\0${projectId}`;
+}
+
+function isCacheStrategyValue(v: unknown): v is CacheStrategy {
+	return v === "mutable" || v === "immutable";
+}
+
+/**
+ * Validate and normalize the raw `cacheStrategy` value loaded from JSON.
+ * Accepts a string scalar, a `prefix → strategy` map, or `undefined`.
+ * For the map form, keys are normalized: a leading `/` is ensured, a trailing
+ * `*` is stripped, and the fallback (`*` / `/` / `""` / `/*`) is stored as `""`.
+ */
+function normalizeCacheStrategy(
+	raw: unknown,
+	projectId: string,
+): CacheStrategyConfig | undefined {
+	if (raw === undefined) return undefined;
+
+	if (typeof raw === "string") {
+		if (!isCacheStrategyValue(raw)) {
+			throw new Error(
+				`Invalid "cacheStrategy" (must be "mutable" or "immutable", projectId="${projectId}")`,
+			);
+		}
+		return raw;
+	}
+
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+		throw new Error(
+			`Invalid "cacheStrategy" (must be "mutable" | "immutable" or an object of prefix → strategy, projectId="${projectId}")`,
+		);
+	}
+
+	const out: Record<string, CacheStrategy> = {};
+	for (const [rawKey, value] of Object.entries(raw as Record<string, unknown>)) {
+		if (!isCacheStrategyValue(value)) {
+			throw new Error(
+				`Invalid "cacheStrategy[${JSON.stringify(rawKey)}]" (must be "mutable" or "immutable", projectId="${projectId}")`,
+			);
+		}
+		// Strip trailing `*` (so `/img/*` and `/img/` are equivalent).
+		let key = rawKey.endsWith("*") ? rawKey.slice(0, -1) : rawKey;
+		// `*`, `/`, or `""` → fallback bucket
+		if (key === "" || key === "/") {
+			key = "";
+		} else if (!key.startsWith("/")) {
+			key = "/" + key;
+		}
+		out[key] = value;
+	}
+	return out;
 }
 
 /**
@@ -171,6 +237,8 @@ export async function loadProjectConfig(
 		);
 	}
 
+	const cacheStrategy = normalizeCacheStrategy(config.cacheStrategy, projectId);
+
 	const result: ProjectConfig = {
 		uploadTokens: config.uploadTokens as string[],
 		downloadTokens: Array.isArray(config.downloadTokens)
@@ -189,7 +257,7 @@ export async function loadProjectConfig(
 				config.getAccessControl === "jwt"
 			? config.getAccessControl
 			: "public",
-		cacheStrategy: config.cacheStrategy === "immutable" ? "immutable" : "mutable",
+		cacheStrategy,
 		maxFileSize: typeof config.maxFileSize === "number"
 			? config.maxFileSize
 			: undefined,

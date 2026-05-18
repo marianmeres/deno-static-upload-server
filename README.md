@@ -95,7 +95,7 @@ server.start();
 - `uploadTokens` (required) — empty array disables auth for uploads
 - `downloadTokens` — if non-empty, GET requires a matching bearer token
 - `getAccessControl` — `"public"` (default), `"token"`, or `"jwt"` for GET requests
-- `cacheStrategy` — `"mutable"` (default) or `"immutable"` (for content-hashed filenames)
+- `cacheStrategy` — `"mutable"` (default) or `"immutable"` (for content-hashed filenames). Also accepts a `prefix → strategy` map for per-subpath control within one project, e.g. `{ "/img/": "immutable", "*": "mutable" }`. Longest matching prefix wins; bare `*` or `/` is the fallback. See [API.md](./API.md#cache-headers) for details.
 - `maxFileSize` — bytes; oversized uploads return `413` (streaming enforcement)
 - `allowedExtensions` — lowercase, no dot. Non-matching extensions return `400`
 - `allowedMimeTypes` — exact MIME type or `type/*` wildcard

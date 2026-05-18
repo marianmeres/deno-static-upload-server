@@ -23,13 +23,14 @@ src/logger.ts          — Logger interface, defaultLogger(), silentLogger
 src/plugin.ts          — PluginHandler, PluginContext, loadPlugin() (sandboxed to configDir)
 src/cdn.ts             — CdnAdapter, CdnOptions, createCdnAdapter(), noStoreHeaders()
 src/cdn/cloudflare.ts  — CloudflareCdnAdapter
+src/cache-strategy.ts  — resolveCacheStrategy(cfg, filePath) (longest-prefix lookup)
 src/handlers/form.ts   — GET /:projectId (upload form, lazy-loads HTML)
 src/handlers/upload.ts — POST /:projectId (streaming write with byte cap, partial-failure reporting)
 src/handlers/serve.ts  — GET/HEAD /:projectId/* (nosniff, forceDownload, CORS off for protected)
 src/handlers/delete.ts — DELETE /:projectId/*
 src/upload.html        — Upload form template
 tests/_helpers.ts      — Shared test utilities
-tests/*.test.ts        — auth, auth_timing, cache, cdn, config, delete, hardening, jwt, plugin, policy, serve, upload
+tests/*.test.ts        — auth, auth_timing, cache, cache-strategy, cdn, config, delete, hardening, jwt, plugin, policy, serve, upload
 example/main.ts        — Example usage
 .env.example           — Example env config
 ```
@@ -75,7 +76,7 @@ example/main.ts        — Example usage
 | `plugin`            | `string`                       | —           | Path relative to configDir; **must resolve inside configDir**      |
 | `jwt.secret`        | `string`                       | —           | Per-project JWT secret                                             |
 | `getAccessControl`  | `"public" \| "token" \| "jwt"` | `"public"`  | GET access control                                                 |
-| `cacheStrategy`     | `"mutable" \| "immutable"`     | `"mutable"` | For content-hashed filenames                                       |
+| `cacheStrategy`     | `CacheStrategyConfig`          | `"mutable"` | Scalar (`"mutable"`/`"immutable"`) **or** `Record<prefix, strategy>` for per-subpath control. Longest matching prefix wins; `*`/`/` is the fallback bucket. Resolved per request by `resolveCacheStrategy` ([src/cache-strategy.ts](src/cache-strategy.ts)) before being passed to `CdnAdapter.applyCacheHeaders`. |
 | `maxFileSize`       | `number`                       | —           | Bytes; per-file cap. Oversize → `413` with `rejected` in response. |
 | `allowedExtensions` | `string[]`                     | —           | Lowercase, no dot. Non-match → `400` with `rejected`.              |
 | `allowedMimeTypes`  | `string[]`                     | —           | Exact or `type/*` wildcard. Non-match → `400` with `rejected`.     |
@@ -86,6 +87,7 @@ example/main.ts        — Example usage
 - **Streaming uploads with byte cap**: `src/handlers/upload.ts` uses `Deno.open` + manual chunk loop so size limits are enforced mid-stream without buffering the whole file.
 - **Partial success reporting**: upload response is `{ uploaded, rejected? }`. `rejected` is `[{ name, reason }]` if any files were skipped. All-rejected → `413` (size-only) or `400`.
 - **CDN purge is fire-and-forget** (`queueMicrotask`): response is not blocked on CDN round-trip. `CdnAdapter.purgeCache` contract: must never throw.
+- **Per-prefix cache strategy**: `cacheStrategy` accepts a `{ prefix: "mutable" | "immutable" }` map alongside the scalar form. `normalizeCacheStrategy` ([src/config.ts](src/config.ts)) strips trailing `*` and stores the fallback (`*` / `/` / `""` / `/*`) as `""`. The serve handler resolves once per request with the project-relative path (`"/" + filePath`).
 - **Hardening headers** on all served files: `X-Content-Type-Options: nosniff` (always), `Content-Disposition: attachment` (if `forceDownload`).
 - **CORS**: enabled only for fully public GETs. Disabled when `downloadTokens` set OR `getAccessControl` is `"token"` / `"jwt"`.
 - **Timing-safe token comparison** (`timingSafeEqualStr`): walks full `expected.length`, XOR-accumulates diff, compares once at end.

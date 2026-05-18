@@ -199,7 +199,7 @@ export async function createServer(
 			) {
 				return handleServe(
 					req,
-					"",
+					projectId, // filePath = the requested filename
 					{ uploadTokens: [] },
 					options.staticDir,
 					{ cdn: cdnAdapter, logger },
@@ -347,7 +347,7 @@ async function routeToHandler(
 
 	// File path present — file-level routes
 	if (method === "GET" || method === "HEAD") {
-		return await handleServe(req, projectId, config, staticDir, {
+		return await handleServe(req, filePath, config, staticDir, {
 			jwtSecret,
 			globalToken,
 			cdn,

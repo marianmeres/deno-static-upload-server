@@ -4,6 +4,7 @@ import { extractBearerToken, isAuthorized, timingSafeEqualStr } from "../auth.ts
 import { verifyJwt } from "../jwt.ts";
 import type { CdnAdapter } from "../cdn.ts";
 import type { Logger } from "../logger.ts";
+import { resolveCacheStrategy } from "../cache-strategy.ts";
 
 interface ServeDeps {
 	jwtSecret?: string;
@@ -36,10 +37,15 @@ function addHardeningHeaders(res: Response, forceDownload?: boolean): Response {
 
 /**
  * Handle GET/HEAD /:projectId/path/to/file — serve static files.
+ *
+ * `filePath` is the project-relative path (no leading `/`, no `:projectId`
+ * segment). For root-file mounts (favicon.ico, robots.txt, …) it's just the
+ * filename. Used both as the cache-strategy lookup key and (implicitly via
+ * `req.url`) by `serveDir` for the filesystem lookup.
  */
 export async function handleServe(
 	req: Request,
-	_projectId: string,
+	filePath: string,
 	config: ProjectConfig,
 	staticDir: string,
 	deps: ServeDeps,
@@ -81,19 +87,14 @@ export async function handleServe(
 		}
 	}
 
-	// serveDir only accepts GET, so convert HEAD→GET and strip body
-	const effectiveReq = req.method === "HEAD"
-		? new Request(req.url, {
-			method: "GET",
-			headers: req.headers,
-		})
-		: req;
-
 	// CORS: only advertise on public content. Protected content should not be
 	// fetchable cross-origin without an explicit server-side opt-in.
 	const enableCors = !isProtected(config);
 
-	let res = await serveDir(effectiveReq, {
+	// `serveDir` (@std/http >= 1.0) handles HEAD natively — returns the
+	// correct headers (Content-Length, ETag, Last-Modified, …) with a null
+	// body and short-circuits the file read. Pass the request through as-is.
+	let res = await serveDir(req, {
 		fsRoot: staticDir,
 		urlRoot: "",
 		enableCors,
@@ -102,16 +103,6 @@ export async function handleServe(
 	// Apply hardening headers before anything else copies them.
 	res = addHardeningHeaders(res, config.forceDownload);
 
-	if (req.method === "HEAD") {
-		res.body?.cancel();
-		const headRes = new Response(null, {
-			status: res.status,
-			headers: res.headers,
-		});
-		const immutable = config.cacheStrategy === "immutable";
-		return cdn ? cdn.applyCacheHeaders(headRes, immutable) : headRes;
-	}
-
-	const immutable = config.cacheStrategy === "immutable";
-	return cdn ? cdn.applyCacheHeaders(res, immutable) : res;
+	const strategy = resolveCacheStrategy(config.cacheStrategy, "/" + filePath);
+	return cdn ? cdn.applyCacheHeaders(res, strategy === "immutable") : res;
 }

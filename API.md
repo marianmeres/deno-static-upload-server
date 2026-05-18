@@ -108,7 +108,7 @@ Each project requires a JSON config file at `{configDir}/{projectId}.json`:
 | `plugin`            | `string`   | No       | —           | Plugin module path, relative to configDir (must resolve inside configDir)       |
 | `jwt.secret`        | `string`   | No       | —           | Per-project JWT secret (falls back to global `jwtSecret`)                       |
 | `getAccessControl`  | `string`   | No       | `"public"`  | `"public"`, `"token"`, or `"jwt"`                                               |
-| `cacheStrategy`     | `string`   | No       | `"mutable"` | `"mutable"` or `"immutable"` (for content-hashed filenames)                     |
+| `cacheStrategy`     | `string \| object` | No | `"mutable"` | `"mutable"` / `"immutable"`, or a `prefix → strategy` map. See [Cache strategies](#cache-strategies). |
 | `maxFileSize`       | `number`   | No       | —           | Per-file byte cap. Oversize → `413`. Enforced streaming.                        |
 | `allowedExtensions` | `string[]` | No       | —           | Lowercase, no dot. Non-match → `400`.                                           |
 | `allowedMimeTypes`  | `string[]` | No       | —           | Exact MIME type or `type/*` wildcard. Non-match → `400`.                        |
@@ -344,7 +344,7 @@ interface CdnAdapter {
 }
 ```
 
-The `immutable` flag is derived from the project's `cacheStrategy` config field.
+The `immutable` flag is derived from the project's `cacheStrategy` config field. When the field is a map, the strategy is resolved per request path before the flag is passed in.
 
 ### `CdnOptions`
 
@@ -361,10 +361,33 @@ interface CdnOptions {
 
 ### Cache strategies
 
-Set per project via `"cacheStrategy"` in the project config:
+Set per project via `"cacheStrategy"` in the project config.
+
+**Scalar form** — one strategy for the whole project:
 
 - **`"mutable"`** (default): `Cache-Control: public, max-age=60, s-maxage=604800, stale-while-revalidate=86400`. Browser TTL is short; CDN TTL is long (purged on upload/delete). Configurable via env vars.
 - **`"immutable"`**: `Cache-Control: public, max-age=31536000, immutable`. For content-hashed filenames. Ignores configurable TTL values.
+
+**Map form** — per-subpath strategy within a single project:
+
+```json
+{
+	"cacheStrategy": {
+		"/img/hashed/": "immutable",
+		"/img/":        "mutable",
+		"*":            "mutable"
+	}
+}
+```
+
+- Keys are path prefixes matched against the request path inside the project static dir (e.g. `/img/foo.jpg`).
+- A trailing `*` is allowed and stripped (`/img/*` ≡ `/img/`).
+- A bare `*`, `/`, `/*`, or empty string is the **fallback** entry for paths that don't match any other prefix.
+- **Longest matching prefix wins** — order in the JSON doesn't matter.
+- If no prefix matches and no fallback is given, behaviour falls back to `"mutable"`.
+- Values must be `"mutable"` or `"immutable"`; any other value is rejected at config load time.
+
+The resulting `Cache-Control` string is the same one the adapter would have applied for the scalar form — the map only picks *which* of the two pre-built strings each file gets.
 
 ### Behavior
 

@@ -51,6 +51,60 @@ Deno.test("config: invalid project config returns 500", async () => {
 	}
 });
 
+Deno.test("config: invalid cacheStrategy scalar returns 500", async () => {
+	const staticDir = await Deno.makeTempDir();
+	const configDir = await Deno.makeTempDir();
+	clearConfigCache();
+	await Deno.writeTextFile(
+		join(configDir, "bad.json"),
+		JSON.stringify({ uploadTokens: [], cacheStrategy: "forever" }),
+	);
+	try {
+		const handler = await createHandler({ staticDir, configDir });
+		const res = await handler(new Request(`${BASE}/bad`));
+		assertEquals(res.status, 500);
+	} finally {
+		await cleanup(staticDir, configDir);
+	}
+});
+
+Deno.test("config: invalid cacheStrategy map value returns 500", async () => {
+	const staticDir = await Deno.makeTempDir();
+	const configDir = await Deno.makeTempDir();
+	clearConfigCache();
+	await Deno.writeTextFile(
+		join(configDir, "bad.json"),
+		JSON.stringify({
+			uploadTokens: [],
+			cacheStrategy: { "/img/": "forever" },
+		}),
+	);
+	try {
+		const handler = await createHandler({ staticDir, configDir });
+		const res = await handler(new Request(`${BASE}/bad`));
+		assertEquals(res.status, 500);
+	} finally {
+		await cleanup(staticDir, configDir);
+	}
+});
+
+Deno.test("config: cacheStrategy array (not object) returns 500", async () => {
+	const staticDir = await Deno.makeTempDir();
+	const configDir = await Deno.makeTempDir();
+	clearConfigCache();
+	await Deno.writeTextFile(
+		join(configDir, "bad.json"),
+		JSON.stringify({ uploadTokens: [], cacheStrategy: ["mutable"] }),
+	);
+	try {
+		const handler = await createHandler({ staticDir, configDir });
+		const res = await handler(new Request(`${BASE}/bad`));
+		assertEquals(res.status, 500);
+	} finally {
+		await cleanup(staticDir, configDir);
+	}
+});
+
 Deno.test("config: missing uploadTokens returns 500", async () => {
 	const staticDir = await Deno.makeTempDir();
 	const configDir = await Deno.makeTempDir();

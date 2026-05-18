@@ -85,16 +85,32 @@ export const tools: McpToolDefinition[] = [
 				);
 			}
 
-			// cacheStrategy
-			if (
-				c.cacheStrategy !== undefined &&
-				!["mutable", "immutable"].includes(
-					c.cacheStrategy as string,
-				)
-			) {
-				errors.push(
-					'"cacheStrategy" must be "mutable" or "immutable"',
-				);
+			// cacheStrategy — accepts a scalar OR a {prefix: strategy} map
+			if (c.cacheStrategy !== undefined) {
+				const cs = c.cacheStrategy;
+				if (typeof cs === "string") {
+					if (!["mutable", "immutable"].includes(cs)) {
+						errors.push(
+							'"cacheStrategy" must be "mutable" or "immutable"',
+						);
+					}
+				} else if (
+					typeof cs === "object" &&
+					cs !== null &&
+					!Array.isArray(cs)
+				) {
+					for (const [k, v] of Object.entries(cs)) {
+						if (typeof v !== "string" || !["mutable", "immutable"].includes(v)) {
+							errors.push(
+								`"cacheStrategy[${JSON.stringify(k)}]" must be "mutable" or "immutable"`,
+							);
+						}
+					}
+				} else {
+					errors.push(
+						'"cacheStrategy" must be "mutable" | "immutable" or an object of prefix → strategy',
+					);
+				}
 			}
 
 			// booleans
