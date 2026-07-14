@@ -1,56 +1,21 @@
-import { dirname, resolve } from "@std/path";
+import { resolve } from "@std/path";
 import type { ProjectConfig } from "../config.ts";
 import { isAuthorized } from "../auth.ts";
 import type { CdnAdapter } from "../cdn.ts";
 import { resolveUnderStaticDir, sanitizePath } from "../paths.ts";
 import { checkUploadPolicy } from "../content-type.ts";
 import type { Logger } from "../logger.ts";
+import { saveStreamAtomic, SizeLimitError } from "../storage.ts";
 
-interface UploadDeps {
+/** Dependencies shared by the upload handlers (POST multipart, PUT raw body). */
+export interface UploadDeps {
 	globalToken?: string;
 	cdn?: CdnAdapter;
 	logger: Logger;
-}
-
-/** Lazily stream a file to disk while enforcing a byte cap. Throws on overflow. */
-async function writeWithLimit(
-	tmpPath: string,
-	source: ReadableStream<Uint8Array>,
-	maxBytes: number | undefined,
-): Promise<void> {
-	const file = await Deno.open(tmpPath, {
-		create: true,
-		write: true,
-		truncate: true,
-	});
-	let written = 0;
-	const reader = source.getReader();
-	try {
-		while (true) {
-			const { value, done } = await reader.read();
-			if (done) break;
-			if (!value) continue;
-			written += value.byteLength;
-			if (maxBytes !== undefined && written > maxBytes) {
-				throw new Error(`size limit exceeded (${maxBytes} bytes)`);
-			}
-			let off = 0;
-			while (off < value.byteLength) {
-				off += await file.write(value.subarray(off));
-			}
-		}
-	} finally {
-		try {
-			file.close();
-		} catch {
-			// already closed
-		}
-		try {
-			reader.releaseLock();
-		} catch {
-			// ignore
-		}
-	}
+	/** Server-level fallback byte cap, applied when the project sets no `maxFileSize`. */
+	maxUploadSize?: number;
+	/** Abort a stalled upload when no body chunk arrives within this many ms. */
+	uploadIdleTimeoutMs?: number;
 }
 
 /**
@@ -63,7 +28,7 @@ export async function handleUpload(
 	staticDir: string,
 	deps: UploadDeps,
 ): Promise<Response> {
-	const { globalToken, cdn, logger } = deps;
+	const { globalToken, cdn, logger, maxUploadSize, uploadIdleTimeoutMs } = deps;
 
 	if (!isAuthorized(req, config.uploadTokens, globalToken)) {
 		logger.warn("upload.unauthorized", { projectId });
@@ -80,8 +45,11 @@ export async function handleUpload(
 	const uploaded: string[] = [];
 	const rejected: { name: string; reason: string }[] = [];
 	const absStaticDir = resolve(staticDir);
+	// Project maxFileSize wins; server maxUploadSize is the fallback cap.
+	const maxBytes = config.maxFileSize ?? maxUploadSize;
 	let anySizeExceeded = false;
 	let anyPolicyReject = false;
+	let anyWriteFailed = false;
 
 	for (const [_field, value] of formData.entries()) {
 		if (!(value instanceof File)) continue;
@@ -99,7 +67,7 @@ export async function handleUpload(
 		}
 
 		const policyError = checkUploadPolicy(
-			config,
+			{ ...config, maxFileSize: maxBytes },
 			safePath,
 			value.type ?? "",
 			value.size,
@@ -120,27 +88,25 @@ export async function handleUpload(
 			continue;
 		}
 
-		await Deno.mkdir(dirname(destPath), { recursive: true });
-		const tmpPath = destPath + `.tmp_${crypto.randomUUID()}`;
 		try {
-			await writeWithLimit(tmpPath, value.stream(), config.maxFileSize);
-			await Deno.rename(tmpPath, destPath);
+			await saveStreamAtomic(destPath, value.stream(), {
+				maxBytes,
+				idleTimeoutMs: uploadIdleTimeoutMs,
+			});
 		} catch (e) {
-			try {
-				await Deno.remove(tmpPath);
-			} catch { /* ignore cleanup errors */ }
-			const msg = e instanceof Error ? e.message : String(e);
-			if (msg.startsWith("size limit exceeded")) {
-				rejected.push({ name: filename, reason: msg });
+			if (e instanceof SizeLimitError) {
+				rejected.push({ name: filename, reason: e.message });
 				anySizeExceeded = true;
 				continue;
 			}
+			const msg = e instanceof Error ? e.message : String(e);
 			logger.error("upload.write_failed", {
 				projectId,
 				name: filename,
 				error: msg,
 			});
 			rejected.push({ name: filename, reason: "write failed" });
+			anyWriteFailed = true;
 			continue;
 		}
 
@@ -171,6 +137,11 @@ export async function handleUpload(
 	if (uploaded.length === 0) {
 		if (anySizeExceeded && !anyPolicyReject) {
 			return Response.json({ uploaded, rejected }, { status: 413 });
+		}
+		// Write failures are server faults — 5xx so clients (and their retry
+		// logic) don't misread disk-full/permissions as a bad request.
+		if (anyWriteFailed && !anyPolicyReject && !anySizeExceeded) {
+			return Response.json({ uploaded, rejected }, { status: 500 });
 		}
 		return Response.json({ uploaded, rejected }, { status: 400 });
 	}

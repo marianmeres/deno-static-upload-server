@@ -3,7 +3,6 @@
  *
  * Reads configuration from environment variables and starts the server.
  * Run directly with `deno run` or as the default package export.
- *
  */
 
 import { createServer } from "./server.ts";
@@ -47,6 +46,20 @@ if (tmpSweep !== undefined && tmpSweep !== "") {
 	if (Number.isFinite(n) && n >= 0) options.tmpSweepMaxAgeMs = n;
 }
 
+// Server-level fallback upload byte cap (0 = unlimited)
+const maxUploadSize = Deno.env.get("MAX_UPLOAD_SIZE");
+if (maxUploadSize !== undefined && maxUploadSize !== "") {
+	const n = Number(maxUploadSize);
+	if (Number.isFinite(n) && n >= 0) options.maxUploadSize = n;
+}
+
+// Abort uploads with no body chunk within this many ms (0 = disabled)
+const uploadIdleTimeout = Deno.env.get("UPLOAD_IDLE_TIMEOUT_MS");
+if (uploadIdleTimeout !== undefined && uploadIdleTimeout !== "") {
+	const n = Number(uploadIdleTimeout);
+	if (Number.isFinite(n) && n >= 0) options.uploadIdleTimeoutMs = n;
+}
+
 // CDN integration (optional)
 const cdnProvider = Deno.env.get("CDN_PROVIDER");
 if (cdnProvider) {
@@ -64,8 +77,9 @@ if (cdnProvider) {
 	const staleWhileRevalidate = Number(
 		Deno.env.get("CDN_STALE_WHILE_REVALIDATE"),
 	);
-	if (staleWhileRevalidate > 0)
+	if (staleWhileRevalidate > 0) {
 		cdn.staleWhileRevalidate = staleWhileRevalidate;
+	}
 
 	// Provider-specific env vars
 	const cfZoneId = Deno.env.get("CF_ZONE_ID");

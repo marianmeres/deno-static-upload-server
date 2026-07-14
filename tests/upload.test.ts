@@ -65,6 +65,29 @@ Deno.test("upload: no files in form data returns 400", async () => {
 	}
 });
 
+Deno.test("upload: all-files-write-failed returns 500, not 400", async () => {
+	const { staticDir, configDir } = await setup("proj");
+	try {
+		const handler = await createHandler({ staticDir, configDir });
+		// store a plain file "a" …
+		const first = await handler(
+			makeUploadRequest("proj", [{ name: "a", content: "f" }]),
+		);
+		assertEquals(first.status, 200);
+		// … then upload "a/b": mkdir hits the file, a server-side write
+		// failure — must surface as 5xx with a structured envelope
+		const res = await handler(
+			makeUploadRequest("proj", [{ name: "a/b", content: "x" }]),
+		);
+		assertEquals(res.status, 500);
+		const body = await res.json();
+		assertEquals(body.uploaded, []);
+		assertEquals(body.rejected[0].reason, "write failed");
+	} finally {
+		await cleanup(staticDir, configDir);
+	}
+});
+
 // ─── Path traversal ─────────────────────────────────────────────────
 
 Deno.test("path traversal: .. segments are stripped", async () => {

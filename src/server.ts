@@ -13,6 +13,7 @@ import { clearConfigCache, isValidProjectId, loadProjectConfig } from "./config.
 import type { ProjectConfig } from "./config.ts";
 import { handleForm } from "./handlers/form.ts";
 import { handleUpload } from "./handlers/upload.ts";
+import { handlePut } from "./handlers/put.ts";
 import { handleServe } from "./handlers/serve.ts";
 import { handleDelete } from "./handlers/delete.ts";
 import { loadPlugin } from "./plugin.ts";
@@ -68,6 +69,18 @@ export interface StaticServerOptions {
 	 * this many milliseconds are removed. Set `0` to disable. @default 3_600_000 (1h)
 	 */
 	tmpSweepMaxAgeMs?: number;
+	/**
+	 * Server-level fallback for the per-file upload byte cap, applied when a
+	 * project config sets no `maxFileSize`. Guards against a single streaming
+	 * upload filling the disk. Set `0` for unlimited. @default 2_147_483_648 (2 GiB)
+	 */
+	maxUploadSize?: number;
+	/**
+	 * Abort an upload when no body chunk arrives for this many milliseconds
+	 * (guards slow-drip connections pinning fds and tmp files). Set `0` to
+	 * disable. @default 60_000
+	 */
+	uploadIdleTimeoutMs?: number;
 }
 
 const DEFAULT_OPTIONS: Required<
@@ -79,6 +92,8 @@ const DEFAULT_OPTIONS: Required<
 		| "enableUploadForm"
 		| "rootFiles"
 		| "tmpSweepMaxAgeMs"
+		| "maxUploadSize"
+		| "uploadIdleTimeoutMs"
 	>
 > = {
 	port: 8000,
@@ -87,6 +102,8 @@ const DEFAULT_OPTIONS: Required<
 	enableUploadForm: true,
 	rootFiles: [],
 	tmpSweepMaxAgeMs: 60 * 60 * 1000,
+	maxUploadSize: 2 * 1024 * 1024 * 1024,
+	uploadIdleTimeoutMs: 60_000,
 };
 
 /** Static server instance returned by {@linkcode createServer}. */
@@ -123,7 +140,13 @@ async function sweepTmpFiles(
 				const full = `${dir}/${entry.name}`;
 				if (entry.isDirectory) {
 					await walk(full);
-				} else if (entry.isFile && /\.tmp_[0-9a-f-]+$/.test(entry.name)) {
+				} else if (
+					entry.isFile &&
+					// Exact crypto.randomUUID() shape — a looser pattern would
+					// also match stored user files like "backup.tmp_2026-07-14".
+					/\.tmp_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+						.test(entry.name)
+				) {
 					try {
 						const stat = await Deno.stat(full);
 						if (stat.mtime && stat.mtime.getTime() < cutoff) {
@@ -156,6 +179,11 @@ export async function createServer(
 	const cdnAdapter = await createCdnAdapter(options.cdn);
 	const VERSION = await getVersion();
 	const absStaticDir = resolve(options.staticDir);
+	// `0` (and negatives) mean "disabled" — normalize to undefined once here.
+	const maxUploadSize = options.maxUploadSize > 0 ? options.maxUploadSize : undefined;
+	const uploadIdleTimeoutMs = options.uploadIdleTimeoutMs > 0
+		? options.uploadIdleTimeoutMs
+		: undefined;
 
 	// Startup tmp sweep (non-blocking for request handling).
 	queueMicrotask(() => {
@@ -164,7 +192,7 @@ export async function createServer(
 
 	const rootFileSet = new Set(options.rootFiles);
 
-	async function handler(req: Request): Promise<Response> {
+	async function handleRequest(req: Request): Promise<Response> {
 		const url = new URL(req.url);
 		const pathname = url.pathname;
 
@@ -241,6 +269,8 @@ export async function createServer(
 				options.enableUploadForm,
 				VERSION,
 				logger,
+				maxUploadSize,
+				uploadIdleTimeoutMs,
 			);
 
 		// Plugin support: if configured, let plugin handle first
@@ -271,6 +301,25 @@ export async function createServer(
 		return defaultHandler(req);
 	}
 
+	// Last-resort guard: an uncaught throw anywhere above must never become an
+	// opaque, unlogged 500 (or crash an embedder that mounts `handler` without
+	// its own error handling). The body is byte-identical to Deno.serve's
+	// default so nothing downstream changes.
+	async function handler(req: Request): Promise<Response> {
+		try {
+			return await handleRequest(req);
+		} catch (err) {
+			logger.error("request.unhandled", {
+				method: req.method,
+				path: new URL(req.url).pathname,
+				error: err instanceof Error ? err.message : String(err),
+				name: err instanceof Error ? err.name : undefined,
+				stack: err instanceof Error ? err.stack : undefined,
+			});
+			return new Response("Internal Server Error", { status: 500 });
+		}
+	}
+
 	return {
 		handler,
 		version: VERSION,
@@ -290,8 +339,22 @@ export async function createServer(
 			console.log(`    POST   /:projectId   upload files`);
 			console.log(`    GET    /:projectId/* serve files`);
 			console.log(`    HEAD   /:projectId/* file info`);
+			console.log(`    PUT    /:projectId/* upload file (raw body)`);
 			console.log(`    DELETE /:projectId/* delete file`);
-			return Deno.serve({ port: options.port }, handler);
+			return Deno.serve({
+				port: options.port,
+				// Belt-and-braces: `handler` catches its own errors; this
+				// catches anything outside it (e.g. response-stream failures)
+				// that Deno would otherwise swallow into an unlogged 500.
+				onError: (err) => {
+					logger.error("request.unhandled", {
+						error: err instanceof Error ? err.message : String(err),
+						name: err instanceof Error ? err.name : undefined,
+						stack: err instanceof Error ? err.stack : undefined,
+					});
+					return new Response("Internal Server Error", { status: 500 });
+				},
+			}, handler);
 		},
 	};
 }
@@ -309,6 +372,8 @@ async function routeToHandler(
 	defaultEnableForm: boolean,
 	version: string,
 	logger: Logger,
+	maxUploadSize: number | undefined,
+	uploadIdleTimeoutMs: number | undefined,
 ): Promise<Response> {
 	const method = req.method;
 
@@ -340,6 +405,8 @@ async function routeToHandler(
 				globalToken,
 				cdn,
 				logger,
+				maxUploadSize,
+				uploadIdleTimeoutMs,
 			});
 		}
 		return new Response("Not found", { status: 404 });
@@ -352,6 +419,15 @@ async function routeToHandler(
 			globalToken,
 			cdn,
 			logger,
+		});
+	}
+	if (method === "PUT") {
+		return handlePut(req, projectId, filePath, config, staticDir, {
+			globalToken,
+			cdn,
+			logger,
+			maxUploadSize,
+			uploadIdleTimeoutMs,
 		});
 	}
 	if (method === "DELETE") {

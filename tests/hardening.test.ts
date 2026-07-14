@@ -1,4 +1,5 @@
-import { assertEquals } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
+import { join } from "@std/path";
 import { BASE, cleanup, createHandler, makeUploadRequest, setup } from "./_helpers.ts";
 
 // ─── X-Content-Type-Options: nosniff ────────────────────────────────
@@ -146,3 +147,46 @@ Deno.test(
 		}
 	},
 );
+
+// ─── FR-1: uncaught handler errors ──────────────────────────────────
+
+Deno.test("hardening: uncaught handler error is logged and returns generic 500", async () => {
+	const { staticDir, configDir } = await setup("p", { uploadTokens: ["t"] });
+	const events: [string, Record<string, unknown> | undefined][] = [];
+	const logger = {
+		debug: () => {},
+		info: () => {},
+		warn: () => {},
+		error: (event: string, data?: Record<string, unknown>) => {
+			events.push([event, data]);
+		},
+	};
+	try {
+		const handler = await createHandler({ staticDir, configDir, logger });
+		const up = await handler(
+			makeUploadRequest("p", [{ name: "f.txt", content: "hi" }], "t"),
+		);
+		assertEquals(up.status, 200);
+
+		// Read-only project dir makes DELETE's Deno.remove throw — an
+		// uncaught error that the handler wrap must convert into a logged 500.
+		await Deno.chmod(join(staticDir, "p"), 0o555);
+		const res = await handler(
+			new Request(`${BASE}/p/f.txt`, {
+				method: "DELETE",
+				headers: { Authorization: "Bearer t" },
+			}),
+		);
+		assertEquals(res.status, 500);
+		assertEquals(await res.text(), "Internal Server Error");
+
+		const unhandled = events.find(([e]) => e === "request.unhandled");
+		assert(unhandled, "request.unhandled must be logged");
+		assertEquals(unhandled[1]?.method, "DELETE");
+		assertEquals(unhandled[1]?.path, "/p/f.txt");
+		assert(typeof unhandled[1]?.stack === "string");
+	} finally {
+		await Deno.chmod(join(staticDir, "p"), 0o755).catch(() => {});
+		await cleanup(staticDir, configDir);
+	}
+});

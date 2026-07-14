@@ -48,6 +48,21 @@ export function makeUploadRequest(
 	});
 }
 
+export function makePutRequest(
+	projectId: string,
+	path: string,
+	body: BodyInit | null,
+	opts: { token?: string; headers?: Record<string, string> } = {},
+): Request {
+	const headers: Record<string, string> = { ...opts.headers };
+	if (opts.token) headers["Authorization"] = `Bearer ${opts.token}`;
+	return new Request(`${BASE}/${projectId}/${path}`, {
+		method: "PUT",
+		body,
+		headers,
+	});
+}
+
 /** Create a handler from options, with temp dirs already resolved. */
 export async function createHandler(
 	opts: StaticServerOptions,

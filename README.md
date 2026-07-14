@@ -8,7 +8,7 @@ A lightweight, self-hosted static file server with upload endpoint and per-proje
 ## Features
 
 - **Per-project configuration** — each project gets its own JSON config with independent auth tokens
-- **Upload endpoint** — accepts `multipart/form-data` file uploads with streaming writes and size limits
+- **Upload endpoints** — `multipart/form-data` POST for the browser form, and a raw-body streaming PUT for machine clients and large files (constant memory, any size)
 - **Static file serving** — via `@std/http/file-server` (range requests, content types, caching headers)
 - **Delete endpoint** — remove uploaded files (requires auth)
 - **Plugin architecture** — custom handlers per project, sandboxed to configDir
@@ -117,17 +117,18 @@ See [API.md](API.md) for complete API documentation.
 
 ### Routes
 
-| Method | Path            | Description              |
-| ------ | --------------- | ------------------------ |
-| GET    | `/`             | Version signature        |
-| GET    | `/<rootFile>`   | Whitelisted root file    |
-| GET    | `/:projectId`   | Upload form              |
-| POST   | `/:projectId`   | Upload files             |
-| GET    | `/:projectId/*` | Serve static file        |
-| HEAD   | `/:projectId/*` | File info (headers only) |
-| DELETE | `/:projectId/*` | Delete file              |
+| Method | Path            | Description                      |
+| ------ | --------------- | -------------------------------- |
+| GET    | `/`             | Version signature                |
+| GET    | `/<rootFile>`   | Whitelisted root file            |
+| GET    | `/:projectId`   | Upload form                      |
+| POST   | `/:projectId`   | Upload files (multipart)         |
+| GET    | `/:projectId/*` | Serve static file                |
+| HEAD   | `/:projectId/*` | File info (headers only)         |
+| PUT    | `/:projectId/*` | Upload file (raw body, streamed) |
+| DELETE | `/:projectId/*` | Delete file                      |
 
-### Upload a file
+### Upload a file (multipart POST)
 
 ```bash
 curl -X POST http://localhost:8000/my-app \
@@ -150,7 +151,33 @@ If one or more files are rejected by policy (size/extension/MIME), the response 
 }
 ```
 
-All-rejected responses return `413` when size was the only reason, otherwise `400`.
+All-rejected responses return `413` when size was the only reason, `500` when all rejections were write failures, otherwise `400`.
+
+> **Memory note:** parsing multipart buffers the whole request body in RAM
+> (~3–3.5× the file size at peak, per concurrent upload). POST is meant for the
+> browser form and small files — for large files or machine clients, use PUT.
+
+### Upload a file (streaming PUT)
+
+The request body **is** the file; the destination path comes from the URL. Bytes
+stream from the socket straight to disk — constant memory, any file size — and
+are atomically renamed into place when complete.
+
+```bash
+curl -T backup.sql.gz \
+  -H "Authorization: Bearer my-secret-token" \
+  http://localhost:8000/my-app/daily/backup.sql.gz
+```
+
+**Response:**
+
+```json
+{ "uploaded": ["/my-app/daily/backup.sql.gz"], "size": 100452466 }
+```
+
+`size` is the number of bytes stored — clients streaming without a
+`Content-Length` (e.g. Deno/browser `fetch`) should verify it against the
+source file size. See [API.md](API.md) for status codes and details.
 
 ### Delete a file
 
@@ -191,9 +218,12 @@ The API token needs the **Cache Purge** permission for your zone. See [API.md](A
 - **CORS** is disabled automatically when GETs are protected (`downloadTokens` set, or `getAccessControl` is `"token"` / `"jwt"`). Public content still gets `Access-Control-Allow-Origin: *`.
 - **Constant-time token comparison** for upload/download tokens and the global token.
 - **Plugin sandbox**: plugin paths must resolve inside `configDir`.
-- **`maxFileSize`** enforcement is streaming — oversized uploads are aborted mid-stream (the temp file is removed).
+- **`maxFileSize`** enforcement is streaming — oversized uploads are aborted mid-stream (the temp file is removed). Projects without `maxFileSize` fall back to the server-level `maxUploadSize` (default 2 GiB; `MAX_UPLOAD_SIZE=0` for unlimited) so a single streaming upload can't fill the disk.
+- **Stalled uploads** are aborted after 60s without a body chunk (`UPLOAD_IDLE_TIMEOUT_MS`, `0` disables) so slow-drip connections can't pin file descriptors and temp files indefinitely.
+- **Unhandled request errors** return a generic 500 and are logged as `request.unhandled` with the stack — enable `LOG=true` in production (docker-compose does this by default).
 - **Recommendation for public upload endpoints**: serve uploaded files from a dedicated cookieless domain, and combine with `forceDownload` and `allowedExtensions`/`allowedMimeTypes` to constrain accepted content.
 - **Rate limiting** is out of scope — put a reverse-proxy limiter in front of the server if exposed to the public internet.
+- **Reverse proxy + large uploads**: if nginx fronts this server, keep `client_max_body_size` in sync with your server-side caps, and consider `proxy_request_buffering off` for the streaming PUT route so bodies aren't spooled to the proxy's disk first — see [nginx.example.conf](nginx.example.conf).
 
 ## Plugin system
 

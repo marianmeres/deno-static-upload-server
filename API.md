@@ -62,21 +62,25 @@ interface StaticServerOptions {
 	rootFiles?: string[]; // Default: []
 	logger?: boolean | Logger; // Default: false (silent)
 	tmpSweepMaxAgeMs?: number; // Default: 3_600_000 (1 hour)
+	maxUploadSize?: number; // Default: 2_147_483_648 (2 GiB); 0 = unlimited
+	uploadIdleTimeoutMs?: number; // Default: 60_000; 0 = disabled
 }
 ```
 
-| Field              | Type                  | Default      | Description                                                                         |
-| ------------------ | --------------------- | ------------ | ----------------------------------------------------------------------------------- |
-| `port`             | `number`              | `8000`       | Port to listen on                                                                   |
-| `staticDir`        | `string`              | `"./static"` | Root directory for stored files                                                     |
-| `configDir`        | `string`              | `"./config"` | Directory containing per-project JSON config files                                  |
-| `enableUploadForm` | `boolean`             | `true`       | Server-level default for upload form (per-project `enableUploadForm` overrides)     |
-| `jwtSecret`        | `string`              | —            | Shared JWT secret (per-project `jwt.secret` overrides)                              |
-| `globalToken`      | `string`              | —            | Superuser token accepted across all projects                                        |
-| `cdn`              | `Partial<CdnOptions>` | —            | CDN adapter options. Omit to disable                                                |
-| `rootFiles`        | `string[]`            | `[]`         | Exact root filenames served from `staticDir` (e.g. `["favicon.ico", "robots.txt"]`) |
-| `logger`           | `boolean \| Logger`   | `false`      | `true` → JSON-line logs to stderr; object → custom logger; falsey → silent          |
-| `tmpSweepMaxAgeMs` | `number`              | `3_600_000`  | On startup, remove `.tmp_*` files older than this. `0` disables sweep.              |
+| Field                 | Type                  | Default         | Description                                                                                      |
+| --------------------- | --------------------- | --------------- | ------------------------------------------------------------------------------------------------ |
+| `port`                | `number`              | `8000`          | Port to listen on                                                                                |
+| `staticDir`           | `string`              | `"./static"`    | Root directory for stored files                                                                  |
+| `configDir`           | `string`              | `"./config"`    | Directory containing per-project JSON config files                                               |
+| `enableUploadForm`    | `boolean`             | `true`          | Server-level default for upload form (per-project `enableUploadForm` overrides)                  |
+| `jwtSecret`           | `string`              | —               | Shared JWT secret (per-project `jwt.secret` overrides)                                           |
+| `globalToken`         | `string`              | —               | Superuser token accepted across all projects                                                     |
+| `cdn`                 | `Partial<CdnOptions>` | —               | CDN adapter options. Omit to disable                                                             |
+| `rootFiles`           | `string[]`            | `[]`            | Exact root filenames served from `staticDir` (e.g. `["favicon.ico", "robots.txt"]`)              |
+| `logger`              | `boolean \| Logger`   | `false`         | `true` → JSON-line logs to stderr; object → custom logger; falsey → silent                       |
+| `tmpSweepMaxAgeMs`    | `number`              | `3_600_000`     | On startup, remove `.tmp_*` files older than this. `0` disables sweep.                           |
+| `maxUploadSize`       | `number`              | `2_147_483_648` | Server-level per-file byte cap, applied when the project sets no `maxFileSize`. `0` = unlimited. |
+| `uploadIdleTimeoutMs` | `number`              | `60_000`        | Abort an upload when no body chunk arrives within this window (`408`). `0` disables.             |
 
 ### `ProjectConfig`
 
@@ -99,20 +103,20 @@ Each project requires a JSON config file at `{configDir}/{projectId}.json`:
 }
 ```
 
-| Field               | Type       | Required | Default     | Description                                                                     |
-| ------------------- | ---------- | -------- | ----------- | ------------------------------------------------------------------------------- |
-| `uploadTokens`      | `string[]` | **Yes**  | —           | Bearer tokens for upload/delete auth. `[]` = open                               |
-| `downloadTokens`    | `string[]` | No       | —           | Bearer tokens for download auth. If non-empty, GET requires auth                |
-| `enableUploadForm`  | `boolean`  | No       | server-side | Per-project override of server default                                          |
-| `enableDelete`      | `boolean`  | No       | `true`      | Enable DELETE endpoint (requires non-empty `uploadTokens`)                      |
-| `plugin`            | `string`   | No       | —           | Plugin module path, relative to configDir (must resolve inside configDir)       |
-| `jwt.secret`        | `string`   | No       | —           | Per-project JWT secret (falls back to global `jwtSecret`)                       |
-| `getAccessControl`  | `string`   | No       | `"public"`  | `"public"`, `"token"`, or `"jwt"`                                               |
-| `cacheStrategy`     | `string \| object` | No | `"mutable"` | `"mutable"` / `"immutable"`, or a `prefix → strategy` map. See [Cache strategies](#cache-strategies). |
-| `maxFileSize`       | `number`   | No       | —           | Per-file byte cap. Oversize → `413`. Enforced streaming.                        |
-| `allowedExtensions` | `string[]` | No       | —           | Lowercase, no dot. Non-match → `400`.                                           |
-| `allowedMimeTypes`  | `string[]` | No       | —           | Exact MIME type or `type/*` wildcard. Non-match → `400`.                        |
-| `forceDownload`     | `boolean`  | No       | `false`     | Adds `Content-Disposition: attachment` to served files (inline-XSS mitigation). |
+| Field               | Type               | Required | Default     | Description                                                                                                                                           |
+| ------------------- | ------------------ | -------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `uploadTokens`      | `string[]`         | **Yes**  | —           | Bearer tokens for upload/delete auth. `[]` = open                                                                                                     |
+| `downloadTokens`    | `string[]`         | No       | —           | Bearer tokens for download auth. If non-empty, GET requires auth                                                                                      |
+| `enableUploadForm`  | `boolean`          | No       | server-side | Per-project override of server default                                                                                                                |
+| `enableDelete`      | `boolean`          | No       | `true`      | Enable DELETE endpoint (requires non-empty `uploadTokens`)                                                                                            |
+| `plugin`            | `string`           | No       | —           | Plugin module path, relative to configDir (must resolve inside configDir)                                                                             |
+| `jwt.secret`        | `string`           | No       | —           | Per-project JWT secret (falls back to global `jwtSecret`)                                                                                             |
+| `getAccessControl`  | `string`           | No       | `"public"`  | `"public"`, `"token"`, or `"jwt"`                                                                                                                     |
+| `cacheStrategy`     | `string \| object` | No       | `"mutable"` | `"mutable"` / `"immutable"`, or a `prefix → strategy` map. See [Cache strategies](#cache-strategies).                                                 |
+| `maxFileSize`       | `number`           | No       | —           | Per-file byte cap. Oversize → `413`. Enforced streaming. When unset, the server-level `maxUploadSize` (default 2 GiB) applies.                        |
+| `allowedExtensions` | `string[]`         | No       | —           | Lowercase, no dot. Non-match → `400`.                                                                                                                 |
+| `allowedMimeTypes`  | `string[]`         | No       | —           | Exact MIME type or `type/*` wildcard. Non-match → `400`. POST checks the client-declared per-part type; PUT derives the MIME from the file extension. |
+| `forceDownload`     | `boolean`          | No       | `false`     | Adds `Content-Disposition: attachment` to served files (inline-XSS mitigation).                                                                       |
 
 ### `Logger`
 
@@ -127,19 +131,21 @@ interface Logger {
 
 Events emitted by the server (for filtering/monitoring):
 
-| Event                      | Level | Data                                                                             |
-| -------------------------- | ----- | -------------------------------------------------------------------------------- |
-| `upload.unauthorized`      | warn  | `{ projectId }`                                                                  |
-| `upload.write_failed`      | error | `{ projectId, name, error }`                                                     |
-| `upload.done`              | info  | `{ projectId, uploaded, rejected }`                                              |
-| `delete.unauthorized`      | warn  | `{ projectId, path }`                                                            |
-| `delete.done`              | info  | `{ projectId, path }`                                                            |
-| `serve.unauthorized`       | warn  | `{ reason }` where reason ∈ `downloadTokens`/`token`/`jwt_missing`/`jwt_invalid` |
-| `serve.jwt_not_configured` | error | —                                                                                |
-| `config.load_failed`       | error | `{ projectId, error }`                                                           |
-| `plugin.error`             | error | `{ projectId, error }`                                                           |
-| `cdn.purge_failed`         | error | `{ error }`                                                                      |
-| `tmp.swept`                | info  | `{ path }`                                                                       |
+| Event                      | Level | Data                                                                                      |
+| -------------------------- | ----- | ----------------------------------------------------------------------------------------- |
+| `upload.unauthorized`      | warn  | `{ projectId }` (`+ via: "put"` on the PUT route)                                         |
+| `upload.write_failed`      | error | `{ projectId, name, error }` (`+ via: "put"` on the PUT route)                            |
+| `upload.idle_timeout`      | warn  | `{ projectId, name }`                                                                     |
+| `upload.done`              | info  | `{ projectId, uploaded, rejected }` (`+ via: "put", size` on the PUT route)               |
+| `delete.unauthorized`      | warn  | `{ projectId, path }`                                                                     |
+| `delete.done`              | info  | `{ projectId, path }`                                                                     |
+| `serve.unauthorized`       | warn  | `{ reason }` where reason ∈ `downloadTokens`/`token`/`jwt_missing`/`jwt_invalid`          |
+| `serve.jwt_not_configured` | error | —                                                                                         |
+| `config.load_failed`       | error | `{ projectId, error }`                                                                    |
+| `plugin.error`             | error | `{ projectId, error }`                                                                    |
+| `cdn.purge_failed`         | error | `{ error }`                                                                               |
+| `tmp.swept`                | info  | `{ path }`                                                                                |
+| `request.unhandled`        | error | `{ method, path, error, name, stack }` — uncaught handler error (returned as generic 500) |
 
 ---
 
@@ -169,6 +175,12 @@ Use for `favicon.ico`, `robots.txt`, etc.
 
 Upload one or more files via `multipart/form-data`.
 
+> **Memory note:** parsing multipart buffers the **whole request body in RAM**
+> (~3–3.5× the file size at peak, per concurrent upload). This route is meant
+> for the browser upload form and small files. Machine clients uploading large
+> files should use [`PUT /:projectId/path`](#put-projectidpathtofile), which
+> streams the body straight to disk.
+
 **Headers:**
 
 - `Authorization: Bearer <token>` — Required when project's `uploadTokens` is non-empty. The global token (`GLOBAL_TOKEN`) is also accepted.
@@ -196,10 +208,64 @@ If any files were rejected by policy (size/extension/MIME) or failed to write, t
 | ------ | -------------------------------------- | ------------------------------------------------------------------------------------- |
 | 400    | `Invalid form data`                    | Malformed multipart body                                                              |
 | 400    | `No files received`                    | No file fields in form data                                                           |
-| 400    | `{ uploaded: [], rejected: [...] }`    | All files rejected by policy (extension/MIME) or write failure                        |
+| 400    | `{ uploaded: [], rejected: [...] }`    | All files rejected by policy (extension/MIME)                                         |
 | 413    | `{ uploaded: [...], rejected: [...] }` | One or more files rejected for exceeding `maxFileSize` (when all rejections are size) |
+| 500    | `{ uploaded: [], rejected: [...] }`    | All files failed to write (disk full, permissions, …)                                 |
 | 401    | `Unauthorized`                         | Missing or invalid bearer token                                                       |
 | 404    | `Not found`                            | Project config not found                                                              |
+
+---
+
+### `PUT /:projectId/path/to/file`
+
+Upload a single file as the **raw request body** — no multipart envelope. Bytes
+stream from the socket straight to disk (constant memory, any file size), land
+in a temp file, and are atomically renamed into place on success. The
+destination path comes from the URL (percent-decoded, then sanitized the same
+way as multipart filenames).
+
+Intended for machine clients (backup relays, CI, `curl -T`) and large files.
+
+**Headers:**
+
+- `Authorization: Bearer <token>` — Required when project's `uploadTokens` is non-empty. The global token (`GLOBAL_TOKEN`) is also accepted.
+- `Content-Length` — optional but recommended. When present it is used to reject oversized uploads _before_ reading the body, and a body that ends short of it is rejected instead of published (truncation guard). Chunked bodies (no `Content-Length`) are fully supported; verify `size` in the response instead.
+- `Content-Type` — ignored for policy. `allowedMimeTypes` is checked against the MIME type **derived from the file extension**, so it cannot be spoofed (and honest `application/octet-stream` clients are not rejected).
+
+```bash
+curl -T backup.sql.gz \
+  -H "Authorization: Bearer my-secret-token" \
+  https://uploads.example.com/my-app/daily/backup.sql.gz
+```
+
+**Response (200):**
+
+```json
+{ "uploaded": ["/my-app/daily/backup.sql.gz"], "size": 100452466 }
+```
+
+`size` is the number of bytes written — clients that stream without
+`Content-Length` should compare it against the source file size.
+
+Existing files are overwritten (same as POST). The path in `uploaded` is the
+authoritative stored path (sanitization may rename, e.g. `my file.txt` →
+`my_file.txt`); use it for subsequent GET/DELETE.
+
+**Error responses:**
+
+| Status | Body                                | Cause                                                                                                                           |
+| ------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | `Missing request body`              | No request body                                                                                                                 |
+| 400    | `Invalid path`                      | Malformed percent-encoding, or path sanitizes to empty                                                                          |
+| 400    | `{ uploaded: [], rejected: [...] }` | Policy reject (extension/MIME), path escape, or body shorter than declared `Content-Length`                                     |
+| 401    | `Unauthorized`                      | Missing or invalid bearer token                                                                                                 |
+| 404    | `Not found`                         | Project config not found (or no file path in the URL)                                                                           |
+| 408    | `{ uploaded: [], rejected: [...] }` | No body chunk arrived within `uploadIdleTimeoutMs`                                                                              |
+| 413    | `{ uploaded: [], rejected: [...] }` | Body exceeds the effective cap (`maxFileSize`, else `maxUploadSize`) — pre-checked via `Content-Length` and enforced mid-stream |
+| 500    | `{ uploaded: [], rejected: [...] }` | Write failure (disk full, permissions, …)                                                                                       |
+
+On any failure the temp file is removed; a partially uploaded file is never
+visible at the destination path.
 
 ---
 
@@ -309,24 +375,26 @@ deno run --env=.env -A jsr:@marianmeres/deno-static-upload-server
 
 **Environment variables:**
 
-| Variable                     | Purpose                                                        |
-| ---------------------------- | -------------------------------------------------------------- |
-| `PORT`                       | Port to listen on                                              |
-| `STATIC_DIR`                 | Root static file dir                                           |
-| `CONFIG_DIR`                 | Project configs dir                                            |
-| `ENABLE_UPLOAD_FORM`         | `false` disables upload form globally                          |
-| `JWT_SECRET`                 | Shared JWT secret                                              |
-| `GLOBAL_TOKEN`               | Cross-project superuser token                                  |
-| `ROOT_FILES`                 | Comma-separated root filenames (e.g. `favicon.ico,robots.txt`) |
-| `LOG`                        | `true` or `1` enables JSON-line logs to stderr                 |
-| `TMP_SWEEP_MAX_AGE_MS`       | `.tmp_*` sweep max age in ms (`0` disables)                    |
-| `CDN_PROVIDER`               | Provider name (e.g. `cloudflare`)                              |
-| `CDN_CACHE_PURGE_URL_PREFIX` | Public URL prefix for purge URLs                               |
-| `CDN_CACHE_MAX_AGE`          | Browser `max-age` in seconds                                   |
-| `CDN_CACHE_S_MAXAGE`         | CDN `s-maxage` in seconds                                      |
-| `CDN_STALE_WHILE_REVALIDATE` | Stale-while-revalidate window in seconds                       |
-| `CF_ZONE_ID`                 | Cloudflare zone ID                                             |
-| `CF_API_TOKEN`               | Cloudflare API token with Cache Purge permission               |
+| Variable                     | Purpose                                                                         |
+| ---------------------------- | ------------------------------------------------------------------------------- |
+| `PORT`                       | Port to listen on                                                               |
+| `STATIC_DIR`                 | Root static file dir                                                            |
+| `CONFIG_DIR`                 | Project configs dir                                                             |
+| `ENABLE_UPLOAD_FORM`         | `false` disables upload form globally                                           |
+| `JWT_SECRET`                 | Shared JWT secret                                                               |
+| `GLOBAL_TOKEN`               | Cross-project superuser token                                                   |
+| `ROOT_FILES`                 | Comma-separated root filenames (e.g. `favicon.ico,robots.txt`)                  |
+| `LOG`                        | `true` or `1` enables JSON-line logs to stderr                                  |
+| `TMP_SWEEP_MAX_AGE_MS`       | `.tmp_*` sweep max age in ms (`0` disables)                                     |
+| `MAX_UPLOAD_SIZE`            | Fallback per-file byte cap when project sets no `maxFileSize` (`0` = unlimited) |
+| `UPLOAD_IDLE_TIMEOUT_MS`     | Abort uploads with no body chunk within this window (`0` disables)              |
+| `CDN_PROVIDER`               | Provider name (e.g. `cloudflare`)                                               |
+| `CDN_CACHE_PURGE_URL_PREFIX` | Public URL prefix for purge URLs                                                |
+| `CDN_CACHE_MAX_AGE`          | Browser `max-age` in seconds                                                    |
+| `CDN_CACHE_S_MAXAGE`         | CDN `s-maxage` in seconds                                                       |
+| `CDN_STALE_WHILE_REVALIDATE` | Stale-while-revalidate window in seconds                                        |
+| `CF_ZONE_ID`                 | Cloudflare zone ID                                                              |
+| `CF_API_TOKEN`               | Cloudflare API token with Cache Purge permission                                |
 
 ---
 
@@ -374,8 +442,8 @@ Set per project via `"cacheStrategy"` in the project config.
 {
 	"cacheStrategy": {
 		"/img/hashed/": "immutable",
-		"/img/":        "mutable",
-		"*":            "mutable"
+		"/img/": "mutable",
+		"*": "mutable"
 	}
 }
 ```
@@ -387,7 +455,7 @@ Set per project via `"cacheStrategy"` in the project config.
 - If no prefix matches and no fallback is given, behaviour falls back to `"mutable"`.
 - Values must be `"mutable"` or `"immutable"`; any other value is rejected at config load time.
 
-The resulting `Cache-Control` string is the same one the adapter would have applied for the scalar form — the map only picks *which* of the two pre-built strings each file gets.
+The resulting `Cache-Control` string is the same one the adapter would have applied for the scalar form — the map only picks _which_ of the two pre-built strings each file gets.
 
 ### Behavior
 
